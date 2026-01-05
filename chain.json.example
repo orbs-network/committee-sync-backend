@@ -1,0 +1,5 @@
+[
+  ["https://mainnet.infura.io/v3/YOUR_PROJECT_ID", "0x1234567890123456789012345678901234567890"],
+  ["https://polygon-rpc.com", "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"]
+]
+
