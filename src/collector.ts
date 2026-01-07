@@ -1,5 +1,5 @@
-import { Client } from '@orbs-network/orbs-client';
 import { SignatureData } from './types';
+import { Client } from '@orbs-network/orbs-client';
 
 export class SignatureCollector {
   private client: Client;

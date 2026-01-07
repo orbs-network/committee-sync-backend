@@ -6,7 +6,6 @@
       "ES2020"
     ],
     "outDir": "./dist",
-    "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -15,13 +14,7 @@
     "moduleResolution": "node",
     "declaration": true,
     "declarationMap": true,
-    "sourceMap": true,
-    "baseUrl": ".",
-    "paths": {
-      "@orbs-network/orbs-client": [
-        "../orbs-client/lib"
-      ]
-    }
+    "sourceMap": true
   },
   "include": [
     "src/**/*"

@@ -1,5 +1,5 @@
-import { Client } from '@orbs-network/orbs-client';
 import { CommitteeData, CommitteeMember } from './types';
+import { Client } from '@orbs-network/orbs-client';
 
 export class CommitteeFetcher {
   private client: Client;

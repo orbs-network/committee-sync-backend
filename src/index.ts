@@ -18,7 +18,7 @@ class CommitteeSyncService {
   constructor() {
     // Load configuration
     this.config = loadEnvConfig();
-    
+
     // Initialize components
     this.committeeFetcher = new CommitteeFetcher(this.config.seedIP);
     this.signatureCollector = new SignatureCollector(this.config.seedIP);
@@ -107,7 +107,7 @@ class CommitteeSyncService {
       try {
         committee = await this.committeeFetcher.getCurrentCommittee();
         console.log(`Fetched committee with ${committee.members.length} members`);
-        
+
         this.statusServer.recordActivity({
           timestamp: new Date().toISOString(),
           type: 'committee_fetch',
@@ -127,7 +127,7 @@ class CommitteeSyncService {
 
       // Check if committee has changed
       const hasChanged = this.committeeFetcher.hasCommitteeChanged(committee);
-      
+
       if (!hasChanged) {
         console.log('Committee has not changed, skipping sync');
         return;
