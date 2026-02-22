@@ -4,11 +4,21 @@ A Node.js TypeScript service that periodically synchronizes the ORBS L3 network 
 
 ## Overview
 
-This service monitors the ORBS L3 network committee and automatically syncs committee changes to configured EVM chains. When a committee change is detected, it:
+This service monitors the ORBS L3 network committee and automatically syncs committee changes to configured EVM chains. The flow is:
 
-1. Fetches the current committee from ORBS L3 network using `@orbs-network/orbs-client` via the `/service/vm-lambda/cmt-sync/getCurrentCommittee` endpoint
-2. Collects signatures from all committee nodes via the `/service/vm-lambda/cmt-sync/getSignedCommittee` endpoint
-3. Submits the committee data and signatures to the `vote` function on committee-sync contracts across all configured EVM chains
+1. **Committee change detection**: Fetches the current committee from ORBS L3 via `getCurrentCommittee`. When the committee changes, it announces a new nonce (N+1).
+2. **Signature collection**: Calls `getSignedCommittee?nonce=N` on each committee node via the lambda, collects all guardian signatures for that nonce, and stores them in PostgreSQL.
+3. **Chain sync**: For each configured EVM chain, reads the contract's `nonce()` state. If the contract is behind the latest stored nonce, submits `sync(newCommittee, newConfig, sigs)` for each missing nonce sequentially.
+
+### Nonce
+
+The **nonce** is the version of the current committee state. Each committee change increments the nonce (N, N+1, N+2, …). The backend:
+
+- **Stores** signed committees per nonce in PostgreSQL (committee payload + guardian signatures)
+- **Reads** each target contract's `nonce()` to see how far behind it is
+- **Submits** one `sync()` transaction per missing nonce, in order, until the contract is up to date
+
+The lambda `getSignedCommittee?nonce=N` returns signatures for a specific nonce; the signed payload includes the nonce.
 
 ## Architecture
 
@@ -39,7 +49,7 @@ This service monitors the ORBS L3 network committee and automatically syncs comm
 │             │                        │
 │  ┌──────────▼───────────────────┐   │
 │  │  Submit to EVM Chains         │   │
-│  │  (vote() function per chain)  │   │
+│  │  (sync() per missing nonce)   │   │
 │  └───────────────────────────────┘   │
 └────────┬─────────────────────────────┘
          │
@@ -53,12 +63,13 @@ This service monitors the ORBS L3 network committee and automatically syncs comm
 
 ## Features
 
-- **Periodic Monitoring**: Configurable interval for checking committee changes
-- **Multi-Chain Support**: Syncs committee to multiple EVM chains simultaneously
-- **Signature Collection**: Aggregates signatures from all committee nodes
-- **Dynamic Configuration**: Reloads `chain.json` on each iteration
+- **Nonce-based sync**: Each committee version has a nonce; signed committees are stored per nonce in PostgreSQL
+- **Periodic monitoring**: Configurable interval for checking committee changes and syncing chains
+- **Multi-chain support**: Syncs committee to multiple EVM chains; each chain's contract nonce is read and updated independently
+- **Signature collection**: Aggregates signatures from all committee nodes via `getSignedCommittee?nonce=N`
+- **Dynamic configuration**: Reloads `chain.json` on each iteration
 - **Status API**: Express server providing real-time status and activity logs
-- **Error Tracking**: Comprehensive error logging and reporting
+- **Error tracking**: Comprehensive error logging and reporting
 
 ## Configuration
 
@@ -78,6 +89,13 @@ PRIVATE_KEY=0x...                       # Private key for signing transactions (
 
 # Express Server Configuration
 PORT=3000                               # Port for status API server (default: 3000)
+
+# Database (PostgreSQL)
+DB_HOST=localhost                       # Database host (default: localhost)
+DB_PORT=5432                            # Database port (default: 5432)
+DB_USER=postgres                        # Database user (default: postgres)
+DB_PASSWORD=                            # Database password
+DB_NAME=committee_sync                  # Database name (default: committee_sync)
 ```
 
 ### Chain Configuration File
@@ -99,15 +117,46 @@ Each entry is an array `[rpcUrl, contractAddress]` where:
 
 ### Contract ABI
 
-The contract ABI for the `vote` function will be provided separately. The expected function signature is:
+The contract exposes `nonce()` (view) and `sync()`. The `abi.json` file must include:
 
 ```solidity
-function vote(address[] memory committee, bytes[] memory signatures) external
+function nonce() external view returns (uint256);
+function sync(address[] memory newCommittee, CommitteeSyncConfig.Config[] memory newConfig, bytes[] memory sigs) external;
 ```
 
-Where:
-- `committee`: Array of committee member addresses
-- `signatures`: Array of hex-encoded signatures corresponding to each committee member
+- `nonce`: Current committee version on the contract
+- `newCommittee`: Array of committee member addresses
+- `newConfig`: Per-member config (structure depends on `CommitteeSyncConfig.Config`)
+- `sigs`: Array of hex-encoded signatures corresponding to each committee member
+
+### Database (PostgreSQL)
+
+The service uses PostgreSQL to store signed committees per nonce. Create the database and ensure the schema is applied. On first run, migrations in `migrations/001_schema.sql` are applied automatically.
+
+**Schema:**
+- `committee_nonces`: One row per nonce with committee payload (nonce, committee_hash, committee_json, created_at)
+- `committee_signatures`: One row per guardian signature (nonce, guardian_address, signature, created_at)
+
+### Start PostgreSQL locally (Docker)
+
+The project includes a Docker setup for local development:
+
+```bash
+./db/run.sh
+```
+
+This starts PostgreSQL in a container with data persisted in `db/data/`. Credentials are in `db/docker.env` (user: `postgres`, password: `postgres`, database: `committee_sync`).
+
+Ensure your `.env` includes:
+```
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_NAME=committee_sync
+```
+
+To stop: `docker stop committee-sync-db`. See `db/README.md` for more options.
 
 ## Installation
 
@@ -242,20 +291,18 @@ Returns the current status of the service including activity history, sync stati
 1. **Load Configuration**: Reload `chain.json` file
 2. **Fetch Committee**: Use `@orbs-network/orbs-client` to get current committee from ORBS L3 network:
    - Get committee nodes using `client.getNodes({ committeeOnly: true })`
-   - Call `/service/vm-lambda/cmt-sync/getCurrentCommittee` endpoint on a committee node using `node.get('vm-lambda/cmt-sync/getCurrentCommittee')`
+   - Call `{LAMBDA_SCRIPT_BASE_URL}/getCurrentCommittee` on a committee node
    - Parse the response to extract the current committee data
-3. **Compare**: Check if committee has changed since last check
-4. **Collect Signatures**: If changed, request signatures from all committee nodes:
-   - Endpoint: `/service/vm-lambda/cmt-sync/getSignedCommittee`
-   - Method: GET
-   - Use `node.get('vm-lambda/cmt-sync/getSignedCommittee')` for each committee node
-   - Collect signatures in parallel for efficiency
-5. **Submit Transactions**: For each `[rpcUrl, contractAddress]` entry in `chain.json`:
-   - Connect to chain via RPC URL
-   - Call `vote(committee, signatures)` function on contract at the specified address
-   - Track transaction status per chain
-6. **Update Status**: Record activity and update status endpoint data
-7. **Wait**: Sleep for `CHECK_INTERVAL` seconds before next iteration
+3. **Committee Change**: If committee has changed:
+   - Compute new nonce = (latest stored nonce in DB) + 1
+   - Call `{LAMBDA_SCRIPT_BASE_URL}/getSignedCommittee?nonce=N` on each committee node
+   - Store committee payload and signatures in PostgreSQL
+4. **Chain Sync**: For each chain in `chain.json`:
+   - Read contract `nonce()` via RPC
+   - If contract nonce < latest stored nonce, load each missing nonce from DB
+   - For each missing nonce, call `sync(newCommittee, newConfig, sigs)` sequentially
+5. **Update Status**: Record activity and update status endpoint data
+6. **Wait**: Sleep for `CHECK_INTERVAL` seconds before next iteration
 
 ### Error Handling
 
@@ -269,6 +316,7 @@ Returns the current status of the service including activity history, sync stati
 - `@orbs-network/orbs-client`: ORBS network client for committee data (imported from sibling folder `../git/orbs-network/orbs-client`)
 - `ethers`: Ethereum library for EVM chain interactions
 - `express`: Web server for status API
+- `pg`: PostgreSQL client for storing signed committees
 - `dotenv`: Environment variable management
 - `typescript`: TypeScript compiler
 

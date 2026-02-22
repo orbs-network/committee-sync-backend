@@ -1,5 +1,12 @@
 [
-  ["https://mainnet.infura.io/v3/YOUR_PROJECT_ID", "0x1234567890123456789012345678901234567890"],
-  ["https://polygon-rpc.com", "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"]
+  [
+    "ethereum",
+    "https://cloudflare-eth.com",
+    "0x33333333142DcC8ffd27C331fA00E780735889ef"
+  ],
+  [
+    "arbitrum",
+    "https://arb1.arbitrum.io/rpc",
+    "0x33333333142DcC8ffd27C331fA00E780735889ef"
+  ]
 ]
-

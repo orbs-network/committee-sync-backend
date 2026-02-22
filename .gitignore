@@ -125,6 +125,10 @@ dist
 # Stores VSCode versions used for testing VSCode extensions
 .vscode-test
 
+# Postgres data (Docker volume)
+db/data/*
+!db/data/.gitkeep
+
 # yarn v3
 .pnp.*
 .yarn/*
@@ -137,3 +141,6 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# may have rpc keys
+chain.json 

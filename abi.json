@@ -1,18 +1,37 @@
 [
   {
+    "inputs": [],
+    "name": "nonce",
+    "outputs": [
+      {
+        "internalType": "uint256",
+        "name": "",
+        "type": "uint256"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address[]",
-        "name": "committee",
+        "name": "newCommittee",
         "type": "address[]"
       },
       {
+        "internalType": "tuple[]",
+        "name": "newConfig",
+        "type": "tuple[]",
+        "components": []
+      },
+      {
         "internalType": "bytes[]",
-        "name": "signatures",
+        "name": "sigs",
         "type": "bytes[]"
       }
     ],
-    "name": "vote",
+    "name": "sync",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
