@@ -143,4 +143,13 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 
 # may have rpc keys
-chain.json 
+chain.json
+
+# Docker env files
+db/docker.env
+
+# Temp/scratch files
+ignore/
+
+# VSCode
+.vscode/
