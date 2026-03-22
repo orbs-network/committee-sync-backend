@@ -1,0 +1,17 @@
+[
+  {
+    "name": "v5-t1",
+    "ip": "18.117.196.182",
+    "orbs_address": "0x481029997EFfD67A74b48C98D763e2a2147e68A6"
+  },
+  {
+    "name": "v5-t2",
+    "ip": "3.145.185.96",
+    "orbs_address": "0x87ed0701e162EB6a73bfd7E0CeF380A7c6a09532"
+  },
+  {
+    "name": "v5-t3",
+    "ip": "3.140.241.215",
+    "orbs_address": "0xA53Fae069a99AfFB15529fea75601f38cea1130c"
+  }
+]

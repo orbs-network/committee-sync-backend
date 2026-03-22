@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Subnet Status</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 2rem;
+      background: #f5f5f5;
+    }
+
+    h1 {
+      margin-bottom: 1rem;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      background: #fff;
+    }
+
+    th,
+    td {
+      border: 1px solid #ddd;
+      padding: 8px 12px;
+      text-align: center;
+    }
+
+    th {
+      background: #333;
+      color: #fff;
+    }
+
+    td:first-child {
+      text-align: left;
+      font-weight: 500;
+    }
+
+    .indicator {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      margin-right: 6px;
+      vertical-align: middle;
+    }
+
+    .green {
+      background: #22c55e;
+    }
+
+    .red {
+      background: #ef4444;
+    }
+
+    .gray {
+      background: #aaa;
+    }
+
+    .btn {
+      padding: 2px 8px;
+      margin: 0 2px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      background: #fafafa;
+      text-decoration: none;
+      color: #333;
+    }
+
+    .btn:hover {
+      background: #eee;
+    }
+
+    #refresh {
+      margin-bottom: 1rem;
+      padding: 6px 16px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>Subnet Status</h1>
+  <button id="refresh" onclick="checkAll()">Refresh</button>
+  <table>
+    <thead>
+      <tr id="header-row"></tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <script>
+    const SERVICES = [
+      'control',
+      'signer',
+      'logger',
+      'management-service',
+      'ethereum-writer',
+      'matic-reader',
+      'matic-writer',
+      'matic-writer',
+    ];
+
+    async function loadNodes() {
+      const resp = await fetch('nodes.json');
+      return resp.json();
+    }
+
+    function serviceUrl(ip, service, endpoint) {
+      return `http://${ip}/services/${service}/${endpoint}`;
+    }
+
+    function buildTable(nodes) {
+      const header = document.getElementById('header-row');
+      header.innerHTML = '<th>Node</th>' + SERVICES.map(s => `<th>${s}</th>`).join('');
+
+      const tbody = document.getElementById('tbody');
+      tbody.innerHTML = '';
+      for (const node of nodes) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${node.name}<br><small>${node.ip}</small><br><small>${node.orbs_address}</small></td>` +
+          SERVICES.map(s => {
+            const cellId = `${node.ip}--${s}`;
+            const statusUrl = serviceUrl(node.ip, s, 'status');
+            const logsUrl = serviceUrl(node.ip, s, 'logs');
+            return `<td id="${cellId}">
+          <span class="indicator gray" id="${cellId}-dot"></span>
+          <span id="${cellId}-label">...</span>
+          <a class="btn" href="${statusUrl}" target="_blank">status</a>
+          <a class="btn" href="${logsUrl}" target="_blank">logs</a>
+        </td>`;
+          }).join('');
+        tbody.appendChild(tr);
+      }
+    }
+
+    async function checkService(ip, service) {
+      const cellId = `${ip}--${service}`;
+      const dot = document.getElementById(`${cellId}-dot`);
+      const label = document.getElementById(`${cellId}-label`);
+      dot.className = 'indicator gray';
+      label.textContent = '...';
+      try {
+        const resp = await fetch(serviceUrl(ip, service, 'status'), { mode: 'no-cors' });
+        if (resp.status === 200 || resp.type === 'opaque') {
+          dot.className = 'indicator green';
+          label.textContent = 'OK';
+        } else {
+          dot.className = 'indicator red';
+          label.textContent = resp.status;
+        }
+      } catch {
+        dot.className = 'indicator red';
+        label.textContent = 'ERR';
+      }
+    }
+
+    let nodes = [];
+
+    async function checkAll() {
+      const checks = [];
+      for (const node of nodes) {
+        for (const service of SERVICES) {
+          checks.push(checkService(node.ip, service));
+        }
+      }
+      await Promise.all(checks);
+    }
+
+    (async () => {
+      nodes = await loadNodes();
+      buildTable(nodes);
+      checkAll();
+    })();
+  </script>
+</body>
+
+</html>
