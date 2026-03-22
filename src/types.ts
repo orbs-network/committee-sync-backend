@@ -1,26 +1,46 @@
 export interface ChainConfig {
+  chainName: string;
   rpcUrl: string;
   contractAddress: string;
 }
 
 export interface CommitteeMember {
-  address: string;
+  ethAddress: string;
+  orbsAddress: string;
+  /** Node IP for fetching signatures (required for collectSignatures) */
+  ip?: string;
+  /** Node port (default 80 if 0 or omitted) */
+  port?: number;
   [key: string]: any; // Allow additional properties from ORBS
+}
+
+/** Per-member config for sync() - maps to CommitteeSyncConfig.Config */
+export interface CommitteeSyncConfigItem {
+  [key: string]: unknown;
 }
 
 export interface CommitteeData {
   members: CommitteeMember[];
+  config?: CommitteeSyncConfigItem[];
+  timestamp: number;
+}
+
+export interface CommitteePayloadWithNonce {
+  nonce: number;
+  members: CommitteeMember[];
+  config?: CommitteeSyncConfigItem[];
   timestamp: number;
 }
 
 export interface SignatureData {
   signature: string; // Hex-encoded signature
-  nodeAddress: string;
+  orbsAddress: string;
 }
 
 export interface ActivityLog {
   timestamp: string;
   type: 'committee_sync' | 'signature_collection' | 'error' | 'committee_fetch' | 'config_reload';
+  chainName?: string;
   rpcUrl?: string;
   contractAddress?: string;
   status: 'success' | 'error';
@@ -34,9 +54,11 @@ export interface ErrorLog {
   message: string;
   node?: string;
   chain?: string;
+  chainName?: string;
 }
 
 export interface ChainSyncStats {
+  chainName: string;
   rpcUrl: string;
   contractAddress: string;
   totalSyncs: number;
@@ -57,10 +79,19 @@ export interface StatusResponse {
   errors: ErrorLog[];
 }
 
+export interface DbConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+}
+
 export interface AppConfig {
   seedIP: string;
   checkInterval: number;
   privateKey: string;
   port: number;
+  db: DbConfig;
 }
 

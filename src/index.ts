@@ -1,13 +1,17 @@
 import 'dotenv/config';
-import { loadEnvConfig, loadChainConfig, getCachedChains } from './config';
+import { loadEnvConfig, loadChainConfig, getCachedChains, getEthereumChain } from './config';
 import { CommitteeFetcher } from './committee';
 import { SignatureCollector } from './collector';
+import { Client, Node } from '@orbs-network/orbs-client';
 import { EVMSyncer } from './sync';
 import { StatusServer } from './status';
-import { ActivityLog, ErrorLog } from './types';
+import { initDb, runMigrations, storeSignedCommittee, getLatestStoredNonce, getNoncesInRange } from './db';
+import { committeeHash } from './hash';
+import type { CommitteeData, CommitteeSyncConfigItem } from './types';
 
 class CommitteeSyncService {
   private config: ReturnType<typeof loadEnvConfig>;
+  private orbsClient: Client;
   private committeeFetcher: CommitteeFetcher;
   private signatureCollector: SignatureCollector;
   private evmSyncer: EVMSyncer;
@@ -20,21 +24,48 @@ class CommitteeSyncService {
     this.config = loadEnvConfig();
 
     // Initialize components
-    this.committeeFetcher = new CommitteeFetcher(this.config.seedIP);
-    this.signatureCollector = new SignatureCollector(this.config.seedIP);
+    this.orbsClient = new Client(this.config.seedIP);
+    if (process.env.DEV_NODE_HOST) {
+      this.orbsClient.localNode = new Node({
+        name: "local_v5_dev",
+        ip: process.env.DEV_NODE_HOST,
+        port: 80,
+        website: "",
+        guardianAddress: "",
+        nodeAddress: "string",
+        reputation: 1,
+        effectiveStake: 1,
+        enterTime: 0,
+        weight: 1,
+        inCommittee: true,
+        teeHardware: false,
+      });
+    }
+
+    this.committeeFetcher = new CommitteeFetcher(this.orbsClient);
+    this.signatureCollector = new SignatureCollector();
     this.evmSyncer = new EVMSyncer(this.config.privateKey);
     this.statusServer = new StatusServer(this.config.port);
   }
+
 
   async start(): Promise<void> {
     console.log('Starting Committee Sync Service...');
 
     try {
-      // Initialize ORBS clients
-      console.log('Initializing ORBS clients...');
-      await this.committeeFetcher.init();
-      await this.signatureCollector.init();
-      console.log('ORBS clients initialized successfully');
+      // Initialize database
+      console.log('Initializing database...');
+      initDb(this.config.db);
+      await runMigrations();
+      console.log('Database initialized successfully');
+
+      // Initialize ORBS client once
+      console.log('Initializing ORBS client...');
+      await this.orbsClient.init();
+      if (!this.orbsClient.initialized()) {
+        throw new Error('Failed to initialize ORBS client');
+      }
+      console.log('ORBS client initialized successfully');
 
       // Start periodic check loop
       this.isRunning = true;
@@ -103,7 +134,7 @@ class CommitteeSyncService {
       }
 
       // Fetch current committee
-      let committee;
+      let committee: CommitteeData | undefined;
       try {
         committee = await this.committeeFetcher.getCurrentCommittee();
         console.log(`Fetched committee with ${committee.members.length} members`);
@@ -125,94 +156,206 @@ class CommitteeSyncService {
         return;
       }
 
+      if (!committee) return;
+
       // Check if committee has changed
       const hasChanged = this.committeeFetcher.hasCommitteeChanged(committee);
+      if (hasChanged) {
+        const ethereumChain = getEthereumChain(chains);
+        if (!ethereumChain) {
+          const errorMsg = 'Ethereum chain not found in chain.json (chainName "ethereum" required for nonce ground truth)';
+          console.error(errorMsg);
+          this.statusServer.recordError({
+            timestamp: new Date().toISOString(),
+            type: 'config',
+            message: errorMsg,
+          });
+        } else {
+          const contractNonce = await this.evmSyncer.readContractNonce(ethereumChain);
+          if (contractNonce === -1) {
+            console.error(`Failed to read contract nonce for ${ethereumChain.chainName}, skipping committee sync`);
+            return;
+          }
+          const lastStored = await getLatestStoredNonce();
+          if (lastStored !== null && lastStored > contractNonce) {
+            console.error(
+              `Invalid state: DB has nonce ${lastStored} but Ethereum contract is at ${contractNonce}. ` +
+              'DB should only contain nonces successfully synced to Ethereum.'
+            );
+            this.statusServer.recordError({
+              timestamp: new Date().toISOString(),
+              type: 'other',
+              message: `Invalid state: DB nonce ${lastStored} > contract nonce ${contractNonce}`,
+            });
+          }
 
-      if (!hasChanged) {
-        console.log('Committee has not changed, skipping sync');
-        return;
-      }
+          const newNonce = contractNonce + 1;
+          console.log(`Committee has changed, collecting signatures for nonce ${newNonce} (contract at ${contractNonce})...`);
 
-      console.log('Committee has changed, collecting signatures...');
+          const committeeWithNodes = await this.committeeFetcher.enrichCommitteeWithNodeInfo(committee);
 
-      // Collect signatures
-      let signatures;
-      try {
-        signatures = await this.signatureCollector.collectSignatures();
-        console.log(`Collected ${signatures.length} signatures`);
+          let signatures;
+          try {
+            signatures = await this.signatureCollector.collectSignatures(committeeWithNodes, newNonce);
+            console.log(`Collected ${signatures.length} signatures`);
 
-        this.statusServer.recordActivity({
-          timestamp: new Date().toISOString(),
-          type: 'signature_collection',
-          status: 'success',
-          details: `Collected ${signatures.length} signatures`,
-        });
-      } catch (error) {
-        const errorMsg = `Failed to collect signatures: ${error instanceof Error ? error.message : String(error)}`;
-        console.error(errorMsg);
-        this.statusServer.recordError({
-          timestamp: new Date().toISOString(),
-          type: 'signature_collection',
-          message: errorMsg,
-        });
-        return;
-      }
-
-      // Update status server with current committee
-      this.statusServer.updateCommittee(committee);
-      this.committeeFetcher.setLastCommittee(committee);
-
-      // Sync to each chain
-      console.log(`Syncing to ${chains.length} chain(s)...`);
-
-      for (const chain of chains) {
-        try {
-          console.log(`Syncing to ${chain.rpcUrl}...`);
-          const result = await this.evmSyncer.syncCommittee(
-            chain,
-            committee.members,
-            signatures
-          );
-
-          if (result.success) {
-            console.log(`✓ Successfully synced to ${chain.rpcUrl}. Tx: ${result.transactionHash}`);
-            this.statusServer.updateSyncStats(chain.rpcUrl, chain.contractAddress, true);
             this.statusServer.recordActivity({
               timestamp: new Date().toISOString(),
-              type: 'committee_sync',
-              rpcUrl: chain.rpcUrl,
-              contractAddress: chain.contractAddress,
+              type: 'signature_collection',
               status: 'success',
-              details: `Committee synced successfully. Tx: ${result.transactionHash}`,
+              details: `Collected ${signatures.length} signatures for nonce ${newNonce}`,
             });
-          } else {
-            console.error(`✗ Failed to sync to ${chain.rpcUrl}: ${result.error}`);
-            this.statusServer.updateSyncStats(chain.rpcUrl, chain.contractAddress, false);
+          } catch (error) {
+            const errorMsg = `Failed to collect signatures: ${error instanceof Error ? error.message : String(error)}`;
+            console.error(errorMsg);
+            this.statusServer.recordError({
+              timestamp: new Date().toISOString(),
+              type: 'signature_collection',
+              message: errorMsg,
+            });
+          }
+
+          if (signatures && signatures.length > 0) {
+            const committeeJson = {
+              members: committee.members,
+              config: committee.config ?? [],
+              timestamp: committee.timestamp,
+            };
+            const committeeAddresses = committee.members.map((m) =>
+              m.ethAddress.startsWith('0x') ? m.ethAddress : `0x${m.ethAddress}`
+            );
+            const config = (committee.config ?? []) as CommitteeSyncConfigItem[];
+            const payload = { committeeAddresses, config, signatures };
+
+            // Sync to Ethereum first: store only after successful on-chain update
+            const ethereumResult = await this.evmSyncer.syncCommittee(ethereumChain, payload);
+
+            if (ethereumResult.success) {
+              console.log(`✓ Synced nonce ${newNonce} to Ethereum. Tx: ${ethereumResult.transactionHash}`);
+              this.statusServer.updateSyncStats(
+                ethereumChain.chainName,
+                ethereumChain.rpcUrl,
+                ethereumChain.contractAddress,
+                true
+              );
+              this.statusServer.recordActivity({
+                timestamp: new Date().toISOString(),
+                type: 'committee_sync',
+                chainName: ethereumChain.chainName,
+                rpcUrl: ethereumChain.rpcUrl,
+                contractAddress: ethereumChain.contractAddress,
+                status: 'success',
+                details: `Nonce ${newNonce} synced to Ethereum. Tx: ${ethereumResult.transactionHash}`,
+              });
+
+              const hash = committeeHash(committeeJson);
+              try {
+                await storeSignedCommittee(newNonce, hash, committeeJson, signatures);
+                console.log(`Stored signed committee for nonce ${newNonce} in DB`);
+                this.statusServer.updateCommittee(committee);
+                this.committeeFetcher.setLastCommittee(committee);
+              } catch (dbError) {
+                const errorMsg = `Failed to store signed committee: ${dbError instanceof Error ? dbError.message : String(dbError)}`;
+                console.error(errorMsg);
+                this.statusServer.recordError({
+                  timestamp: new Date().toISOString(),
+                  type: 'other',
+                  message: errorMsg,
+                });
+              }
+            } else {
+              console.error(`✗ Failed to sync nonce ${newNonce} to Ethereum: ${ethereumResult.error}`);
+              this.statusServer.updateSyncStats(
+                ethereumChain.chainName,
+                ethereumChain.rpcUrl,
+                ethereumChain.contractAddress,
+                false
+              );
+              this.statusServer.recordError({
+                timestamp: new Date().toISOString(),
+                type: 'transaction',
+                message: ethereumResult.error || 'Unknown error',
+                chain: ethereumChain.rpcUrl,
+                chainName: ethereumChain.chainName,
+              });
+            }
+          }
+        }
+      } else {
+        console.log('Committee has not changed');
+      }
+
+      // Sync missing nonces to each chain
+      const latestStored = await getLatestStoredNonce();
+      if (latestStored === null) {
+        console.log('No signed committees in DB, skipping chain sync');
+      } else {
+        console.log(`Syncing chains (latest stored nonce: ${latestStored})...`);
+
+        for (const chain of chains) {
+          try {
+            const contractNonce = await this.evmSyncer.readContractNonce(chain);
+            if (contractNonce === -1) {
+              console.error(`Failed to read contract nonce for ${chain.chainName}, skipping chain sync`);
+              continue;
+            }
+            if (contractNonce >= latestStored) {
+              console.log(`${chain.chainName}: contract nonce ${contractNonce} is up to date`);
+              continue;
+            }
+
+            const fromNonce = contractNonce + 1;
+            const payloads = await getNoncesInRange(fromNonce, latestStored);
+
+            for (const p of payloads) {
+              const committeeAddresses = p.committeeJson.members.map((m: { ethAddress: string }) =>
+                m.ethAddress.startsWith('0x') ? m.ethAddress : `0x${m.ethAddress}`
+              );
+              const config = (p.committeeJson.config ?? []) as CommitteeSyncConfigItem[];
+
+              const result = await this.evmSyncer.syncCommittee(chain, {
+                committeeAddresses,
+                config,
+                signatures: p.signatures,
+              });
+
+              if (result.success) {
+                console.log(`✓ Synced nonce ${p.nonce} to ${chain.chainName}. Tx: ${result.transactionHash}`);
+                this.statusServer.updateSyncStats(chain.chainName, chain.rpcUrl, chain.contractAddress, true);
+                this.statusServer.recordActivity({
+                  timestamp: new Date().toISOString(),
+                  type: 'committee_sync',
+                  chainName: chain.chainName,
+                  rpcUrl: chain.rpcUrl,
+                  contractAddress: chain.contractAddress,
+                  status: 'success',
+                  details: `Nonce ${p.nonce} synced. Tx: ${result.transactionHash}`,
+                });
+              } else {
+                console.error(`✗ Failed to sync nonce ${p.nonce} to ${chain.chainName}: ${result.error}`);
+                this.statusServer.updateSyncStats(chain.chainName, chain.rpcUrl, chain.contractAddress, false);
+                this.statusServer.recordError({
+                  timestamp: new Date().toISOString(),
+                  type: 'transaction',
+                  message: result.error || 'Unknown error',
+                  chain: chain.rpcUrl,
+                  chainName: chain.chainName,
+                });
+                break;
+              }
+            }
+          } catch (error) {
+            const errorMsg = `Error syncing ${chain.chainName}: ${error instanceof Error ? error.message : String(error)}`;
+            console.error(errorMsg);
+            this.statusServer.updateSyncStats(chain.chainName, chain.rpcUrl, chain.contractAddress, false);
             this.statusServer.recordError({
               timestamp: new Date().toISOString(),
               type: 'transaction',
-              message: result.error || 'Unknown error',
+              message: errorMsg,
               chain: chain.rpcUrl,
-            });
-            this.statusServer.recordActivity({
-              timestamp: new Date().toISOString(),
-              type: 'committee_sync',
-              rpcUrl: chain.rpcUrl,
-              contractAddress: chain.contractAddress,
-              status: 'error',
-              details: `Failed to sync: ${result.error}`,
+              chainName: chain.chainName,
             });
           }
-        } catch (error) {
-          const errorMsg = `Error syncing to ${chain.rpcUrl}: ${error instanceof Error ? error.message : String(error)}`;
-          console.error(errorMsg);
-          this.statusServer.updateSyncStats(chain.rpcUrl, chain.contractAddress, false);
-          this.statusServer.recordError({
-            timestamp: new Date().toISOString(),
-            type: 'transaction',
-            message: errorMsg,
-            chain: chain.rpcUrl,
-          });
         }
       }
 

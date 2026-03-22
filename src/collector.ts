@@ -1,88 +1,108 @@
-import { SignatureData } from './types';
-import { Client } from '@orbs-network/orbs-client';
+import { CommitteeData, CommitteeMember, SignatureData } from './types';
+
+const LAMBDA_SCRIPT_BASE_URL =
+  process.env.LAMBDA_SCRIPT_BASE_URL || 'service/vm-lambda/cmt-sync';
+
+function buildServiceUrl(member: CommitteeMember, path: string): string {
+  const ip = member.ip;
+  const port = member.port ?? 80;
+  if (!ip) {
+    throw new Error(
+      `Committee member ${member.ethAddress} has no ip - cannot fetch signature`
+    );
+  }
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const portPart = port === 0 ? '' : `:${port}`;
+  return `http://${ip}${portPart}/services${normalizedPath}`;
+}
 
 export class SignatureCollector {
-  private client: Client;
-
-  constructor(seedIP: string) {
-    this.client = new Client(seedIP);
-  }
-
-  async init(): Promise<void> {
-    await this.client.init();
-    if (!this.client.initialized()) {
-      throw new Error('Failed to initialize ORBS client');
-    }
-  }
-
-  async collectSignatures(): Promise<SignatureData[]> {
-    // Get all committee nodes
-    const nodes = await this.client.getNodes({ committeeOnly: true });
-
-    if (nodes.size() === 0) {
-      throw new Error('No committee nodes found');
+  /**
+   * Collect signatures from committee members for the given nonce.
+   * Uses only the committee data passed in - each member must have ip (and optionally port)
+   * to make HTTP requests to getSignedCommittee.
+   */
+  async collectSignatures(
+    committee: CommitteeData,
+    nonce: number
+  ): Promise<SignatureData[]> {
+    if (!committee.members?.length) {
+      throw new Error('No committee members to collect signatures from');
     }
 
+    const promises = committee.members.map((member) =>
+      this.fetchSignatureFromMember(member, nonce)
+    );
+
+    const results = await Promise.allSettled(promises);
+    return this.collectResults(results, committee.members);
+  }
+
+  private async fetchSignatureFromMember(
+    member: CommitteeMember,
+    nonce: number
+  ): Promise<SignatureData> {
+    const url = buildServiceUrl(
+      member,
+      `${LAMBDA_SCRIPT_BASE_URL}/getSignedCommittee?nonce=${nonce}`
+    );
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    const data: any = await response.json();
+    if (data?.success === false && data?.error) {
+      throw new Error(`Lambda error: ${data.error}`);
+    }
+
+    const signature = data?.result?.signature;
+    if (!signature || typeof signature !== 'string') {
+      throw new Error('Invalid signature format in response');
+    }
+
+    const addr =
+      member.orbsAddress.startsWith('0x') ? member.orbsAddress : `0x${member.orbsAddress}`;
+    return {
+      signature: signature.startsWith('0x') ? signature : `0x${signature}`,
+      orbsAddress: addr,
+    };
+  }
+
+  private collectResults(
+    results: PromiseSettledResult<SignatureData>[],
+    members: CommitteeMember[]
+  ): SignatureData[] {
     const signatures: SignatureData[] = [];
-    const errors: Array<{ node: string; error: string }> = [];
+    const errors: Array<{ member: string; error: string }> = [];
 
-    // Collect signatures in parallel
-    const promises: Promise<void>[] = [];
-    let node = nodes.next();
+    results.forEach((result, i) => {
+      const member = members[i];
+      if (result.status === 'fulfilled') {
+        signatures.push(result.value);
+      } else {
+        errors.push({
+          member: member?.ethAddress ?? 'unknown',
+          error: result.reason?.message ?? String(result.reason),
+        });
+      }
+    });
 
-    while (node !== null) {
-      const currentNode = node;
-      const nodeAddress = currentNode.guardianAddress || currentNode.nodeAddress || currentNode.name;
-
-      promises.push(
-        (async () => {
-          try {
-            // Call the lambda endpoint to get signed committee
-            const response = await currentNode.get('vm-lambda/cmt-sync/getSignedCommittee');
-
-            if (!response.ok) {
-              throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            const data: any = await response.json();
-
-            // Parse the signature from the response
-            // Adjust based on actual API response format
-            const signature = data.signature || data.sig || data;
-
-            if (!signature || typeof signature !== 'string') {
-              throw new Error('Invalid signature format in response');
-            }
-
-            signatures.push({
-              signature: signature.startsWith('0x') ? signature : `0x${signature}`,
-              nodeAddress,
-            });
-          } catch (error) {
-            errors.push({
-              node: nodeAddress,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        })()
-      );
-
-      node = nodes.next();
-    }
-
-    // Wait for all requests to complete
-    await Promise.all(promises);
-
-    // Log errors but continue if we have at least some signatures
     if (errors.length > 0) {
-      console.warn(`Failed to collect signatures from ${errors.length} nodes:`, errors);
+      console.warn(
+        `Failed to collect signatures from ${errors.length} member(s):`,
+        errors
+      );
     }
 
     if (signatures.length === 0) {
-      throw new Error('Failed to collect any signatures from committee nodes');
+      throw new Error(
+        'Failed to collect any signatures from committee members'
+      );
     }
 
     return signatures;
   }
 }
-

@@ -1,12 +1,18 @@
 import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ChainConfig, CommitteeMember, SignatureData } from './types';
+import { ChainConfig, CommitteeSyncConfigItem, SignatureData } from './types';
 
 export interface SyncResult {
   success: boolean;
   transactionHash?: string;
   error?: string;
+}
+
+export interface SyncPayload {
+  committeeAddresses: string[];
+  config: CommitteeSyncConfigItem[];
+  signatures: SignatureData[];
 }
 
 export class EVMSyncer {
@@ -20,7 +26,7 @@ export class EVMSyncer {
 
   private loadABI(): any[] {
     const abiPath = path.join(process.cwd(), 'abi.json');
-    
+
     if (!fs.existsSync(abiPath)) {
       throw new Error(`abi.json file not found at ${abiPath}`);
     }
@@ -28,7 +34,7 @@ export class EVMSyncer {
     try {
       const fileContent = fs.readFileSync(abiPath, 'utf-8');
       const abi = JSON.parse(fileContent);
-      
+
       if (!Array.isArray(abi)) {
         throw new Error('ABI must be an array');
       }
@@ -42,52 +48,62 @@ export class EVMSyncer {
     }
   }
 
+  async readContractNonce(chain: ChainConfig): Promise<number> {
+    try {
+      const provider = new ethers.JsonRpcProvider(chain.rpcUrl);
+      const contract = new ethers.Contract(chain.contractAddress, this.abi, provider);
+      const nonce = await contract.nonce();
+      return Number(nonce);
+    } catch (error) {
+      console.error(`Failed to read contract nonce: ${error instanceof Error ? error.message : String(error)}`);
+      return -1;
+    }
+  }
+
   async syncCommittee(
     chain: ChainConfig,
-    committee: CommitteeMember[],
-    signatures: SignatureData[]
+    payload: SyncPayload
   ): Promise<SyncResult> {
     try {
-      // Create provider and wallet
       const provider = new ethers.JsonRpcProvider(chain.rpcUrl);
       const wallet = new ethers.Wallet(this.privateKey, provider);
-
-      // Get contract instance
       const contract = new ethers.Contract(chain.contractAddress, this.abi, wallet);
 
-      // Prepare committee addresses array
-      const committeeAddresses = committee.map(m => m.address);
+      const committeeAddresses = payload.committeeAddresses.map(a =>
+        a.startsWith('0x') ? a : `0x${a}`
+      );
+      const signatureBytes = payload.signatures.map(sig =>
+        sig.signature.startsWith('0x') ? sig.signature : `0x${sig.signature}`
+      );
+      const newConfig = payload.config ?? [];
 
-      // Prepare signatures array (ensure they're hex strings)
-      const signatureBytes = signatures.map(sig => {
-        const sigStr = sig.signature.startsWith('0x') ? sig.signature : `0x${sig.signature}`;
-        // Remove 0x prefix for bytes array if needed, or keep it - depends on contract
-        return sigStr;
-      });
-
-      // Ensure we have matching counts
       if (committeeAddresses.length !== signatureBytes.length) {
         throw new Error(
           `Mismatch: ${committeeAddresses.length} committee members but ${signatureBytes.length} signatures`
         );
       }
 
-      // Estimate gas first
       let gasEstimate: bigint;
       try {
-        gasEstimate = await contract.vote.estimateGas(committeeAddresses, signatureBytes);
+        gasEstimate = await contract.sync.estimateGas(
+          committeeAddresses,
+          newConfig,
+          signatureBytes
+        );
       } catch (estimateError) {
-        throw new Error(`Gas estimation failed: ${estimateError instanceof Error ? estimateError.message : String(estimateError)}`);
+        throw new Error(
+          `Gas estimation failed: ${estimateError instanceof Error ? estimateError.message : String(estimateError)}`
+        );
       }
 
-      // Send transaction
-      const tx = await contract.vote(committeeAddresses, signatureBytes, {
-        gasLimit: gasEstimate + BigInt(10000), // Add buffer
-      });
+      const tx = await contract.sync(
+        committeeAddresses,
+        newConfig,
+        signatureBytes,
+        { gasLimit: gasEstimate + BigInt(10000) }
+      );
 
-      // Wait for transaction receipt
       const receipt = await tx.wait();
-      
       if (!receipt) {
         throw new Error('Transaction receipt is null');
       }

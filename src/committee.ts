@@ -1,19 +1,12 @@
 import { CommitteeData, CommitteeMember } from './types';
-import { Client } from '@orbs-network/orbs-client';
-
+import { Client, Node } from '@orbs-network/orbs-client';
+const LAMBDA_SCRIPT_BASE_URL = process.env.LAMBDA_SCRIPT_BASE_URL || 'service/vm-lambda/cmt-sync';
 export class CommitteeFetcher {
   private client: Client;
   private lastCommittee: CommitteeData | null = null;
 
-  constructor(seedIP: string) {
-    this.client = new Client(seedIP);
-  }
-
-  async init(): Promise<void> {
-    await this.client.init();
-    if (!this.client.initialized()) {
-      throw new Error('Failed to initialize ORBS client');
-    }
+  constructor(client: Client) {
+    this.client = client;
   }
 
   async getCurrentCommittee(): Promise<CommitteeData> {
@@ -24,36 +17,53 @@ export class CommitteeFetcher {
       throw new Error('No committee nodes found');
     }
 
-    // Use the first node to fetch current committee
-    const node = nodes.get(0);
+    // DEV_NODE_HOST exist, instantiate a new node with the DEV_NODE_HOST
+    let node: Node | null = null;
+    if (this.client.localNode) {
+      node = this.client.localNode;
+    } else {
+      // Use the first node to fetch current committee
+      node = nodes.get(0);
+    }
     if (!node) {
       throw new Error('Failed to get committee node');
     }
 
     try {
       // Call the lambda endpoint to get current committee
-      const response = await node.get('vm-lambda/cmt-sync/getCurrentCommittee');
+      const response = await node.get(`${LAMBDA_SCRIPT_BASE_URL}/getCurrentCommittee`);
 
       if (!response.ok) {
         throw new Error(`Failed to fetch committee: HTTP ${response.status}`);
       }
 
       const data: any = await response.json();
+      if (!data?.success) {
+        throw new Error(`Failed to fetch committee: ${data?.error}`);
+      }
 
-      // Parse the response - adjust based on actual API response format
-      // Assuming the response contains committee members
-      const members: CommitteeMember[] = Array.isArray(data)
-        ? data.map((member: any) => ({
-          address: typeof member === 'string' ? member : member.address || member.guardianAddress,
-          ...member
-        }))
-        : (data.committee || data.members || []).map((member: any) => ({
-          address: typeof member === 'string' ? member : member.address || member.guardianAddress,
-          ...member
-        }));
+      // Parse the response based on format in ignore/cur.comt.example.json
+      const membersArray = data?.result?.members;
+      if (!Array.isArray(membersArray)) {
+        throw new Error('Invalid committee format: result.members must be an array');
+      }
+
+      const members: CommitteeMember[] = membersArray.map((member: any) => {
+        const ethAddr = typeof member?.ethAddress === 'string' ? member.ethAddress : '';
+        const orbsAddr = typeof member?.orbsAddress === 'string' ? member.orbsAddress : '';
+        return {
+          ...member,
+          ethAddress: ethAddr.startsWith('0x') ? ethAddr : `0x${ethAddr}`,
+          orbsAddress: orbsAddr.startsWith('0x') ? orbsAddr : `0x${orbsAddr}`,
+        };
+      });
+
+      // empty array as config if not passed in result
+      const config = Array.isArray(data?.result?.config) ? data.result.config : [];
 
       const committee: CommitteeData = {
         members,
+        config,
         timestamp: Date.now(),
       };
 
@@ -70,10 +80,10 @@ export class CommitteeFetcher {
 
     // Compare committee member addresses
     const oldAddresses = this.lastCommittee.members
-      .map(m => m.address.toLowerCase())
+      .map(m => m.ethAddress.toLowerCase())
       .sort();
     const newAddresses = newCommittee.members
-      .map(m => m.address.toLowerCase())
+      .map(m => m.ethAddress.toLowerCase())
       .sort();
 
     if (oldAddresses.length !== newAddresses.length) {
@@ -95,6 +105,38 @@ export class CommitteeFetcher {
 
   getLastCommittee(): CommitteeData | null {
     return this.lastCommittee;
+  }
+
+  /**
+   * Enriches committee members with ip/port from orbs-client nodes.
+   * Required before passing to collectSignatures (which uses only committee data).
+   */
+  async enrichCommitteeWithNodeInfo(committee: CommitteeData): Promise<CommitteeData> {
+    const nodes = await this.client.getNodes({ committeeOnly: true });
+    if (nodes.size() === 0) return committee;
+
+    const nodeByAddress = new Map<string, Node>();
+    let node = nodes.next();
+    while (node !== null) {
+      const addr = (node.guardianAddress || node.nodeAddress || '').toLowerCase();
+      const normalized = addr.startsWith('0x') ? addr : `0x${addr}`;
+      if (addr) nodeByAddress.set(normalized, node);
+      node = nodes.next();
+    }
+
+    const members: CommitteeMember[] = committee.members.map((m) => {
+      const normalized = m.ethAddress.toLowerCase().startsWith('0x')
+        ? m.ethAddress.toLowerCase()
+        : `0x${m.ethAddress.toLowerCase()}`;
+      const n = nodeByAddress.get(normalized);
+      return {
+        ...m,
+        ip: n?.ip ?? m.ip,
+        port: n?.port ?? m.port ?? 80,
+      };
+    });
+
+    return { ...committee, members };
   }
 }
 

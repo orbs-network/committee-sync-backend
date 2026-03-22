@@ -1,8 +1,20 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { ChainConfig, AppConfig } from './types';
+import { ChainConfig, AppConfig, DbConfig } from './types';
 
 let cachedChains: ChainConfig[] | null = null;
+
+function loadDbConfig(): DbConfig {
+  const host = process.env.DB_HOST || 'localhost';
+  const port = parseInt(process.env.DB_PORT || '5432', 10);
+  if (isNaN(port) || port <= 0) {
+    throw new Error('DB_PORT must be a positive number');
+  }
+  const user = process.env.DB_USER || 'postgres';
+  const password = process.env.DB_PASSWORD || '';
+  const database = process.env.DB_NAME || 'committee_sync';
+  return { host, port, user, password, database };
+}
 
 export function loadEnvConfig(): AppConfig {
   const seedIP = process.env.SEED_IP;
@@ -30,12 +42,13 @@ export function loadEnvConfig(): AppConfig {
     checkInterval,
     privateKey,
     port,
+    db: loadDbConfig(),
   };
 }
 
 export function loadChainConfig(): ChainConfig[] {
   const chainJsonPath = path.join(process.cwd(), 'chain.json');
-  
+
   if (!fs.existsSync(chainJsonPath)) {
     throw new Error(`chain.json file not found at ${chainJsonPath}`);
   }
@@ -49,11 +62,27 @@ export function loadChainConfig(): ChainConfig[] {
     }
 
     const validatedChains: ChainConfig[] = chains.map((chain, index) => {
-      if (!Array.isArray(chain) || chain.length !== 2) {
-        throw new Error(`Invalid chain entry at index ${index}: must be [rpcUrl, contractAddress]`);
+      if (!Array.isArray(chain) || (chain.length !== 2 && chain.length !== 3)) {
+        throw new Error(`Invalid chain entry at index ${index}: must be [chainName, rpcUrl, contractAddress] or [rpcUrl, contractAddress]`);
       }
 
-      const [rpcUrl, contractAddress] = chain;
+      // Support both old format [rpcUrl, contractAddress] and new format [chainName, rpcUrl, contractAddress]
+      let chainName: string;
+      let rpcUrl: string;
+      let contractAddress: string;
+
+      if (chain.length === 3) {
+        // New format: [chainName, rpcUrl, contractAddress]
+        [chainName, rpcUrl, contractAddress] = chain;
+      } else {
+        // Old format: [rpcUrl, contractAddress] - use rpcUrl as chainName for backward compatibility
+        [rpcUrl, contractAddress] = chain;
+        chainName = rpcUrl; // Use rpcUrl as chainName for backward compatibility
+      }
+
+      if (typeof chainName !== 'string' || !chainName.trim()) {
+        throw new Error(`Invalid chainName at index ${index}: must be a non-empty string`);
+      }
 
       if (typeof rpcUrl !== 'string' || !rpcUrl.trim()) {
         throw new Error(`Invalid rpcUrl at index ${index}: must be a non-empty string`);
@@ -64,6 +93,7 @@ export function loadChainConfig(): ChainConfig[] {
       }
 
       return {
+        chainName: chainName.trim(),
         rpcUrl: rpcUrl.trim(),
         contractAddress: contractAddress.trim(),
       };
@@ -81,5 +111,10 @@ export function loadChainConfig(): ChainConfig[] {
 
 export function getCachedChains(): ChainConfig[] | null {
   return cachedChains;
+}
+
+/** Returns the chain with chainName "ethereum" (case-insensitive). Used as ground truth for nonce. */
+export function getEthereumChain(chains: ChainConfig[]): ChainConfig | null {
+  return chains.find((c) => c.chainName.toLowerCase() === 'ethereum') ?? null;
 }
 

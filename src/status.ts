@@ -60,12 +60,14 @@ export class StatusServer {
   }
 
   updateSyncStats(
+    chainName: string,
     rpcUrl: string,
     contractAddress: string,
     success: boolean
   ): void {
     const key = `${rpcUrl}:${contractAddress}`;
     const existing = this.syncStats.get(key) || {
+      chainName,
       rpcUrl,
       contractAddress,
       totalSyncs: 0,
@@ -73,6 +75,8 @@ export class StatusServer {
       lastSyncStatus: null,
     };
 
+    // Update chainName in case it changed
+    existing.chainName = chainName;
     existing.totalSyncs += success ? 1 : 0;
     existing.lastSync = new Date().toISOString();
     existing.lastSyncStatus = success ? 'success' : 'error';
@@ -89,7 +93,7 @@ export class StatusServer {
       uptime,
       currentCommittee: {
         members: this.currentCommittee
-          ? this.currentCommittee.members.map(m => m.address)
+          ? this.currentCommittee.members.map(m => m.ethAddress)
           : [],
         lastUpdated: this.currentCommittee
           ? new Date(this.currentCommittee.timestamp).toISOString()
