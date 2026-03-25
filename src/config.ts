@@ -114,7 +114,7 @@ export function getCachedChains(): ChainConfig[] | null {
 }
 
 /** Returns the chain with chainName "ethereum" (case-insensitive). Used as ground truth for nonce. */
-export function getEthereumChain(chains: ChainConfig[]): ChainConfig | null {
+export function getEvmChain(chains: ChainConfig[]): ChainConfig | null {
   return chains.find((c) => c.chainName.toLowerCase() === 'ethereum') ?? null;
 }
 

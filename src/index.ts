@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { loadEnvConfig, loadChainConfig, getCachedChains, getEthereumChain } from './config';
+import { loadEnvConfig, loadChainConfig, getCachedChains, getEvmChain } from './config';
 import { CommitteeFetcher } from './committee';
 import { SignatureCollector } from './collector';
 import { Client, Node } from '@orbs-network/orbs-client';
@@ -161,8 +161,8 @@ class CommitteeSyncService {
       // Check if committee has changed
       const hasChanged = this.committeeFetcher.hasCommitteeChanged(committee);
       if (hasChanged) {
-        const ethereumChain = getEthereumChain(chains);
-        if (!ethereumChain) {
+        const evmChain = getEvmChain(chains);
+        if (!evmChain) {
           const errorMsg = 'Ethereum chain not found in chain.json (chainName "ethereum" required for nonce ground truth)';
           console.error(errorMsg);
           this.statusServer.recordError({
@@ -171,9 +171,9 @@ class CommitteeSyncService {
             message: errorMsg,
           });
         } else {
-          const contractNonce = await this.evmSyncer.readContractNonce(ethereumChain);
+          const contractNonce = await this.evmSyncer.readContractNonce(evmChain);
           if (contractNonce === -1) {
-            console.error(`Failed to read contract nonce for ${ethereumChain.chainName}, skipping committee sync`);
+            console.error(`Failed to read contract nonce for ${evmChain.chainName}, skipping committee sync`);
             return;
           }
           const lastStored = await getLatestStoredNonce();
@@ -222,30 +222,30 @@ class CommitteeSyncService {
               timestamp: committee.timestamp,
             };
             const committeeAddresses = committee.members.map((m) =>
-              m.ethAddress.startsWith('0x') ? m.ethAddress : `0x${m.ethAddress}`
+              m.orbsAddress.startsWith('0x') ? m.orbsAddress : `0x${m.orbsAddress}`
             );
             const config = (committee.config ?? []) as CommitteeSyncConfigItem[];
             const payload = { committeeAddresses, config, signatures };
 
             // Sync to Ethereum first: store only after successful on-chain update
-            const ethereumResult = await this.evmSyncer.syncCommittee(ethereumChain, payload);
+            const evmResult = await this.evmSyncer.syncCommittee(evmChain, payload);
 
-            if (ethereumResult.success) {
-              console.log(`✓ Synced nonce ${newNonce} to Ethereum. Tx: ${ethereumResult.transactionHash}`);
+            if (evmResult.success) {
+              console.log(`✓ Synced nonce ${newNonce} to Ethereum. Tx: ${evmResult.transactionHash}`);
               this.statusServer.updateSyncStats(
-                ethereumChain.chainName,
-                ethereumChain.rpcUrl,
-                ethereumChain.contractAddress,
+                evmChain.chainName,
+                evmChain.rpcUrl,
+                evmChain.contractAddress,
                 true
               );
               this.statusServer.recordActivity({
                 timestamp: new Date().toISOString(),
                 type: 'committee_sync',
-                chainName: ethereumChain.chainName,
-                rpcUrl: ethereumChain.rpcUrl,
-                contractAddress: ethereumChain.contractAddress,
+                chainName: evmChain.chainName,
+                rpcUrl: evmChain.rpcUrl,
+                contractAddress: evmChain.contractAddress,
                 status: 'success',
-                details: `Nonce ${newNonce} synced to Ethereum. Tx: ${ethereumResult.transactionHash}`,
+                details: `Nonce ${newNonce} synced to Ethereum. Tx: ${evmResult.transactionHash}`,
               });
 
               const hash = committeeHash(committeeJson);
@@ -264,19 +264,19 @@ class CommitteeSyncService {
                 });
               }
             } else {
-              console.error(`✗ Failed to sync nonce ${newNonce} to Ethereum: ${ethereumResult.error}`);
+              console.error(`✗ Failed to sync nonce ${newNonce} to Ethereum: ${evmResult.error}`);
               this.statusServer.updateSyncStats(
-                ethereumChain.chainName,
-                ethereumChain.rpcUrl,
-                ethereumChain.contractAddress,
+                evmChain.chainName,
+                evmChain.rpcUrl,
+                evmChain.contractAddress,
                 false
               );
               this.statusServer.recordError({
                 timestamp: new Date().toISOString(),
                 type: 'transaction',
-                message: ethereumResult.error || 'Unknown error',
-                chain: ethereumChain.rpcUrl,
-                chainName: ethereumChain.chainName,
+                message: evmResult.error || 'Unknown error',
+                chain: evmChain.rpcUrl,
+                chainName: evmChain.chainName,
               });
             }
           }
@@ -308,8 +308,8 @@ class CommitteeSyncService {
             const payloads = await getNoncesInRange(fromNonce, latestStored);
 
             for (const p of payloads) {
-              const committeeAddresses = p.committeeJson.members.map((m: { ethAddress: string }) =>
-                m.ethAddress.startsWith('0x') ? m.ethAddress : `0x${m.ethAddress}`
+              const committeeAddresses = p.committeeJson.members.map((m) =>
+                m.orbsAddress.startsWith('0x') ? m.orbsAddress : `0x${m.orbsAddress}`
               );
               const config = (p.committeeJson.config ?? []) as CommitteeSyncConfigItem[];
 

@@ -5,7 +5,7 @@ export interface CommitteePayload {
   nonce: number;
   committeeHash: string;
   committeeJson: {
-    members: Array<{ ethAddress: string;[key: string]: unknown }>;
+    members: Array<{ ethAddress: string; orbsAddress: string;[key: string]: unknown }>;
     config?: unknown[];
     [key: string]: unknown;
   };
