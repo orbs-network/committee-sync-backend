@@ -77,12 +77,6 @@ export class EVMSyncer {
       );
       const newConfig = payload.config ?? [];
 
-      if (committeeAddresses.length !== signatureBytes.length) {
-        throw new Error(
-          `Mismatch: ${committeeAddresses.length} committee members but ${signatureBytes.length} signatures`
-        );
-      }
-
       let gasEstimate: bigint;
       try {
         gasEstimate = await contract.sync.estimateGas(
