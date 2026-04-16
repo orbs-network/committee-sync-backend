@@ -118,27 +118,31 @@ export class CommitteeFetcher {
     const nodes = await this.client.getNodes({ committeeOnly: true });
     if (nodes.size() === 0) return committee;
 
-    const nodeByAddress = new Map<string, Node>();
+    const nodeByOrbsAddress = new Map<string, Node>();
     let node = nodes.next();
     while (node !== null) {
-      const addr = (node.guardianAddress || node.nodeAddress || '').toLowerCase();
+      const addr = (node.nodeAddress || '').toLowerCase();
       const normalized = addr.startsWith('0x') ? addr : `0x${addr}`;
-      if (addr) nodeByAddress.set(normalized, node);
+      if (addr) nodeByOrbsAddress.set(normalized, node);
       node = nodes.next();
     }
 
-    const members: CommitteeMember[] = committee.members.map((m) => {
-      const normalized = m.ethAddress.toLowerCase().startsWith('0x')
-        ? m.ethAddress.toLowerCase()
-        : `0x${m.ethAddress.toLowerCase()}`;
-      const n = nodeByAddress.get(normalized);
-      return {
-        ...m,
-        ip: n?.ip ?? m.ip,
-        port: n?.port ?? m.port ?? 80,
-      };
-    });
+    const members: CommitteeMember[] = [];
+    for (const m of committee.members) {
+      const normalized = m.orbsAddress.toLowerCase().startsWith('0x')
+        ? m.orbsAddress.toLowerCase()
+        : `0x${m.orbsAddress.toLowerCase()}`;
+      const n = nodeByOrbsAddress.get(normalized);
+      const ip = n?.ip ?? m.ip;
+      const port = n?.port ?? m.port ?? 80;
+      if (!ip) {
+        console.warn(`Skipping member ${m.orbsAddress} — no ip after enrichment`);
+        continue;
+      }
+      members.push({ ...m, ip, port });
+    }
 
+    console.log(`Enriched ${members.length}/${committee.members.length} member(s) with node info`);
     return { ...committee, members };
   }
 }

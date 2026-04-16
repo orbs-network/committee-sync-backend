@@ -13,6 +13,19 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "getCommittee",
+    "outputs": [
+      {
+        "internalType": "address[]",
+        "name": "",
+        "type": "address[]"
+      }
+    ],
+    "stateMutability": "view",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address[]",
@@ -23,7 +36,23 @@
         "internalType": "tuple[]",
         "name": "newConfig",
         "type": "tuple[]",
-        "components": []
+        "components": [
+          {
+            "internalType": "bytes32",
+            "name": "key",
+            "type": "bytes32"
+          },
+          {
+            "internalType": "address",
+            "name": "account",
+            "type": "address"
+          },
+          {
+            "internalType": "bytes",
+            "name": "value",
+            "type": "bytes"
+          }
+        ]
       },
       {
         "internalType": "bytes[]",

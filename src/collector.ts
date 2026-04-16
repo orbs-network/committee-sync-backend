@@ -8,7 +8,7 @@ function buildServiceUrl(member: CommitteeMember, path: string): string {
   const port = member.port ?? 80;
   if (!ip) {
     throw new Error(
-      `Committee member ${member.ethAddress} has no ip - cannot fetch signature`
+      `Committee member ${member.orbsAddress} has no ip - cannot fetch signature`
     );
   }
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
@@ -84,7 +84,7 @@ export class SignatureCollector {
         signatures.push(result.value);
       } else {
         errors.push({
-          member: member?.ethAddress ?? 'unknown',
+          member: member?.orbsAddress ?? 'unknown',
           error: result.reason?.message ?? String(result.reason),
         });
       }

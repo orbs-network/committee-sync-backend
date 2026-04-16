@@ -62,6 +62,23 @@ export class EVMSyncer {
     }
   }
 
+  async readContractCommittee(chain: ChainConfig): Promise<string[]> {
+    try {
+      const provider = new ethers.JsonRpcProvider(chain.rpcUrl);
+      const contract = new ethers.Contract(chain.contractAddress, this.abi, provider);
+      const addresses: string[] = await contract.getCommittee();
+      console.log(
+        `[contract committee] ${chain.chainName} (${chain.contractAddress}): ${addresses.length} member(s) — ${addresses.join(', ')}`
+      );
+      return addresses.map((a) => a.toLowerCase());
+    } catch (error) {
+      console.error(
+        `[contract committee] ${chain.chainName} (${chain.contractAddress}): FAILED — ${error instanceof Error ? error.message : String(error)}`
+      );
+      return [];
+    }
+  }
+
   async syncCommittee(
     chain: ChainConfig,
     payload: SyncPayload

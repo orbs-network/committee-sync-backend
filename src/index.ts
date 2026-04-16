@@ -19,6 +19,7 @@ class CommitteeSyncService {
   private evmSyncer: EVMSyncer;
   private statusServer: StatusServer;
   private isRunning = false;
+  private isChecking = false;
   private checkIntervalId: NodeJS.Timeout | null = null;
 
   constructor() {
@@ -127,6 +128,12 @@ class CommitteeSyncService {
       return;
     }
 
+    if (this.isChecking) {
+      console.log(`[${new Date().toISOString()}] Skipping check — previous cycle still running`);
+      return;
+    }
+    this.isChecking = true;
+
     console.log(`[${new Date().toISOString()}] Starting committee check...`);
 
     try {
@@ -221,39 +228,52 @@ class CommitteeSyncService {
           }
 
           const newNonce = contractNonce + 1;
-          console.log(`Committee has changed, collecting signatures for nonce ${newNonce} (contract at ${contractNonce})...`);
 
-          const committeeWithNodes = await this.committeeFetcher.enrichCommitteeWithNodeInfo(committee);
-
+          // Check if we already have signatures for this nonce in DB (e.g. from a previous
+          // cycle that collected but failed to sync, or from the backfill script).
+          const existingPayload = await getNonceWithSignatures(newNonce);
           let signatures;
-          try {
-            signatures = await this.signatureCollector.collectSignatures(committeeWithNodes, newNonce);
-            console.log(`Collected ${signatures.length} signatures`);
+          let committeeJson;
 
-            this.statusServer.recordActivity({
-              timestamp: new Date().toISOString(),
-              type: 'signature_collection',
-              status: 'success',
-              details: `Collected ${signatures.length} signatures for nonce ${newNonce}`,
-            });
-          } catch (error) {
-            const errorMsg = `Failed to collect signatures: ${error instanceof Error ? error.message : String(error)}`;
-            console.error(errorMsg);
-            this.statusServer.recordError({
-              timestamp: new Date().toISOString(),
-              type: 'signature_collection',
-              message: errorMsg,
-            });
-          }
+          if (existingPayload) {
+            console.log(`Nonce ${newNonce}: found existing signatures in DB (${existingPayload.signatures.length} sig(s)), skipping collection`);
+            signatures = existingPayload.signatures;
+            committeeJson = existingPayload.committeeJson;
+          } else {
+            console.log(`Committee has changed, collecting signatures for nonce ${newNonce} (contract at ${contractNonce})...`);
 
-          if (signatures && signatures.length > 0) {
-            const committeeJson = {
+            const committeeWithNodes = await this.committeeFetcher.enrichCommitteeWithNodeInfo(committee);
+
+            try {
+              signatures = await this.signatureCollector.collectSignatures(committeeWithNodes, newNonce);
+              console.log(`Collected ${signatures.length} signatures`);
+
+              this.statusServer.recordActivity({
+                timestamp: new Date().toISOString(),
+                type: 'signature_collection',
+                status: 'success',
+                details: `Collected ${signatures.length} signatures for nonce ${newNonce}`,
+              });
+            } catch (error) {
+              const errorMsg = `Failed to collect signatures: ${error instanceof Error ? error.message : String(error)}`;
+              console.error(errorMsg);
+              this.statusServer.recordError({
+                timestamp: new Date().toISOString(),
+                type: 'signature_collection',
+                message: errorMsg,
+              });
+            }
+
+            committeeJson = {
               members: committee.members,
               config: committee.config ?? [],
               timestamp: committee.timestamp,
             };
-            const committeeAddresses = committee.members.map((m) =>
-              m.orbsAddress.startsWith('0x') ? m.orbsAddress : `0x${m.orbsAddress}`
+          }
+
+          if (signatures && signatures.length > 0) {
+            const committeeAddresses = (committeeJson!.members as any[]).map((m: any) =>
+              (m.orbsAddress as string).startsWith('0x') ? m.orbsAddress : `0x${m.orbsAddress}`
             );
             const config = (committee.config ?? []) as CommitteeSyncConfigItem[];
             const payload = { committeeAddresses, config, signatures };
@@ -283,12 +303,15 @@ class CommitteeSyncService {
                 details: `Nonce ${newNonce} synced to Ethereum. Tx: ${evmResult.transactionHash}`,
               });
 
-              const hash = committeeHash(committeeJson);
+              // Update in-memory state immediately after successful on-chain sync,
+              // regardless of DB outcome, to prevent false change detection next cycle.
+              this.statusServer.updateCommittee(committee);
+              this.committeeFetcher.setLastCommittee(committee);
+
+              const hash = committeeHash(committeeJson as any);
               try {
-                await storeSignedCommittee(newNonce, hash, committeeJson, signatures);
+                await storeSignedCommittee(newNonce, hash, committeeJson as any, signatures);
                 console.log(`Stored signed committee for nonce ${newNonce} in DB`);
-                this.statusServer.updateCommittee(committee);
-                this.committeeFetcher.setLastCommittee(committee);
               } catch (dbError) {
                 const errorMsg = `Failed to store signed committee: ${dbError instanceof Error ? dbError.message : String(dbError)}`;
                 console.error(errorMsg);
@@ -411,6 +434,8 @@ class CommitteeSyncService {
         type: 'other',
         message: errorMsg,
       });
+    } finally {
+      this.isChecking = false;
     }
   }
 

@@ -1,7 +1,7 @@
 -- Committee nonces: one row per nonce with the committee+config payload
 CREATE TABLE IF NOT EXISTS committee_nonces (
   nonce BIGINT PRIMARY KEY,
-  committee_hash TEXT UNIQUE NOT NULL,
+  committee_hash TEXT NOT NULL,
   committee_json JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
