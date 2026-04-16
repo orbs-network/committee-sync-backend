@@ -22,9 +22,15 @@ export function loadEnvConfig(): AppConfig {
     throw new Error('SEED_IP environment variable is required');
   }
 
-  const checkInterval = parseInt(process.env.CHECK_INTERVAL || '300', 10);
+  const debug = process.env.DEBUG === 'true';
+  const checkInterval = debug
+    ? 10
+    : parseInt(process.env.CHECK_INTERVAL || '300', 10);
   if (isNaN(checkInterval) || checkInterval <= 0) {
     throw new Error('CHECK_INTERVAL must be a positive number');
+  }
+  if (debug) {
+    console.log('DEBUG mode: CHECK_INTERVAL forced to 10 seconds');
   }
 
   const privateKey = process.env.PRIVATE_KEY;

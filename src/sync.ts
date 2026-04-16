@@ -53,9 +53,11 @@ export class EVMSyncer {
       const provider = new ethers.JsonRpcProvider(chain.rpcUrl);
       const contract = new ethers.Contract(chain.contractAddress, this.abi, provider);
       const nonce = await contract.nonce();
-      return Number(nonce);
+      const n = Number(nonce);
+      console.log(`[contract nonce] ${chain.chainName} (${chain.contractAddress}): ${n}`);
+      return n;
     } catch (error) {
-      console.error(`Failed to read contract nonce: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`[contract nonce] ${chain.chainName} (${chain.contractAddress}): FAILED — ${error instanceof Error ? error.message : String(error)}`);
       return -1;
     }
   }

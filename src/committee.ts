@@ -78,12 +78,15 @@ export class CommitteeFetcher {
       return true;
     }
 
-    // Compare committee member addresses
+    // Compare committee member addresses by orbsAddress — that's what the on-chain
+    // contract stores and verifies signatures against. A guardian rotating their orbs
+    // key (same ethAddress, new orbsAddress) is intentionally treated as a cmt change,
+    // since the contract must be re-synced to recognize the new signing key.
     const oldAddresses = this.lastCommittee.members
-      .map(m => m.ethAddress.toLowerCase())
+      .map(m => m.orbsAddress.toLowerCase())
       .sort();
     const newAddresses = newCommittee.members
-      .map(m => m.ethAddress.toLowerCase())
+      .map(m => m.orbsAddress.toLowerCase())
       .sort();
 
     if (oldAddresses.length !== newAddresses.length) {

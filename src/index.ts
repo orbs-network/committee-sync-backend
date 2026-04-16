@@ -1,11 +1,13 @@
 import 'dotenv/config';
+import { initFileLogging } from './logger';
+initFileLogging();
 import { loadEnvConfig, loadChainConfig, getCachedChains, getEvmChain } from './config';
 import { CommitteeFetcher } from './committee';
 import { SignatureCollector } from './collector';
 import { Client, Node } from '@orbs-network/orbs-client';
 import { EVMSyncer } from './sync';
 import { StatusServer } from './status';
-import { initDb, runMigrations, storeSignedCommittee, getLatestStoredNonce, getNoncesInRange } from './db';
+import { initDb, runMigrations, storeSignedCommittee, getLatestStoredNonce, getNoncesInRange, getNonceWithSignatures } from './db';
 import { committeeHash } from './hash';
 import type { CommitteeData, CommitteeSyncConfigItem } from './types';
 
@@ -58,6 +60,28 @@ class CommitteeSyncService {
       initDb(this.config.db);
       await runMigrations();
       console.log('Database initialized successfully');
+
+      // Hydrate lastCommittee from DB so the first check doesn't falsely
+      // detect a change just because in-memory state is empty after restart.
+      const latestNonce = await getLatestStoredNonce();
+      if (latestNonce !== null) {
+        const stored = await getNonceWithSignatures(latestNonce);
+        if (stored) {
+          const members = stored.committeeJson.members.map((m: any) => ({
+            ...m,
+            ethAddress: m.ethAddress || '',
+            orbsAddress: m.orbsAddress || '',
+          }));
+          this.committeeFetcher.setLastCommittee({
+            members,
+            config: (stored.committeeJson.config ?? []) as CommitteeSyncConfigItem[],
+            timestamp: 0,
+          });
+          console.log(`Hydrated lastCommittee from DB (nonce ${latestNonce}, ${members.length} member(s))`);
+        }
+      } else {
+        console.log('No stored committee in DB — first check will treat committee as new');
+      }
 
       // Initialize ORBS client once
       console.log('Initializing ORBS client...');
@@ -158,8 +182,15 @@ class CommitteeSyncService {
 
       if (!committee) return;
 
+      // Log fetched committee orbsAddresses for traceability
+      console.log(
+        `Committee orbsAddresses (${committee.members.length}): ` +
+        committee.members.map((m) => m.orbsAddress).join(', ')
+      );
+
       // Check if committee has changed
       const hasChanged = this.committeeFetcher.hasCommitteeChanged(committee);
+      console.log(`hasCommitteeChanged: ${hasChanged}`);
       if (hasChanged) {
         const evmChain = getEvmChain(chains);
         if (!evmChain) {
@@ -228,6 +259,10 @@ class CommitteeSyncService {
             const payload = { committeeAddresses, config, signatures };
 
             // Sync to Ethereum first: store only after successful on-chain update
+            console.log(
+              `${evmChain.chainName}: submitting fresh sync() for nonce ${newNonce} ` +
+              `(${committeeAddresses.length} member(s), ${signatures.length} sig(s), ${config.length} config item(s))`
+            );
             const evmResult = await this.evmSyncer.syncCommittee(evmChain, payload);
 
             if (evmResult.success) {
@@ -300,18 +335,26 @@ class CommitteeSyncService {
               continue;
             }
             if (contractNonce >= latestStored) {
-              console.log(`${chain.chainName}: contract nonce ${contractNonce} is up to date`);
+              console.log(`${chain.chainName}: contract nonce ${contractNonce} is up to date (DB latest: ${latestStored})`);
               continue;
             }
 
             const fromNonce = contractNonce + 1;
+            const behindBy = latestStored - contractNonce;
+            console.log(`${chain.chainName}: behind by ${behindBy} nonce(s) — contract at ${contractNonce}, DB latest ${latestStored}, syncing ${fromNonce}..${latestStored}`);
             const payloads = await getNoncesInRange(fromNonce, latestStored);
+            console.log(`${chain.chainName}: loaded ${payloads.length} payload(s) from DB for catch-up`);
 
             for (const p of payloads) {
               const committeeAddresses = p.committeeJson.members.map((m) =>
                 m.orbsAddress.startsWith('0x') ? m.orbsAddress : `0x${m.orbsAddress}`
               );
               const config = (p.committeeJson.config ?? []) as CommitteeSyncConfigItem[];
+
+              console.log(
+                `${chain.chainName}: submitting sync() for nonce ${p.nonce} ` +
+                `(${committeeAddresses.length} member(s), ${p.signatures.length} sig(s), ${config.length} config item(s))`
+              );
 
               const result = await this.evmSyncer.syncCommittee(chain, {
                 committeeAddresses,
