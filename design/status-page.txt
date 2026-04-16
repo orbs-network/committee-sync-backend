@@ -1,0 +1,35 @@
+status page 
+
+based on the data stored during runs.
+we need to make sure the code logs all syncs per all chains to db so we can render it in this page
+
+i vision html page in the following structure:
+
+top:
+- current latest committee: 
+  - latest change date
+  - latest nonce
+  - displaying as many known properties of each node (name, ip, orbs and eth addresses etc)
+
+mid sec:
+- sync history
+  - rows are chains, eth and arb for now
+  - columns are little aligned cubes, each cube shows its nonce, and they increase to the right as more and more updates are done. should shoe the progress and latest nonce per each chain. good visual way to see all chains are aligned in case everything is healthy
+  - cubes should indicate weather sync worked, green = tx sent ok, red - failed. 
+  - red cubes should still accumulated so we can see how many tx attempts failed, and become green retroactively (also, keep fail tx date, and success date seperately)
+
+bottom: 
+ click on a cube shows on the bottom the props of the sync that was made for that sync on that chain:
+  - date
+  - errors if we had any
+  - committee 
+  - signatures
+  - tx hash link
+  - gas cost
+  - whatever you suggest
+
+  more TBD: 
+  - general system errors, crashes, whatever we can think of to give me more visibility on the functionality of the backend.
+  - in general, put as many links as possible in the ui to the guardians lambda's curl as well as evm scans permalink and tx hashes.
+  
+

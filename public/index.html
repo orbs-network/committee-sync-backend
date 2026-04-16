@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Committee Sync Status</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      background: #0d1117;
+      color: #c9d1d9;
+      padding: 24px;
+      font-size: 13px;
+    }
+
+    a {
+      color: #58a6ff;
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    h1 {
+      font-size: 18px;
+      color: #f0f6fc;
+      margin-bottom: 4px;
+    }
+
+    h2 {
+      font-size: 14px;
+      color: #8b949e;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .section {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    /* ── Top: Committee ── */
+    .committee-header {
+      display: flex;
+      gap: 24px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .committee-header .stat {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 12px 16px;
+    }
+
+    .stat-label {
+      color: #8b949e;
+      font-size: 11px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .stat-value {
+      color: #f0f6fc;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .members-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+
+    .members-table th {
+      text-align: left;
+      color: #8b949e;
+      font-size: 11px;
+      text-transform: uppercase;
+      padding: 8px 12px;
+      border-bottom: 1px solid #30363d;
+    }
+
+    .members-table td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #21262d;
+      font-size: 12px;
+    }
+
+    .members-table tr:hover td {
+      background: #1c2128;
+    }
+
+    .addr {
+      font-family: 'SF Mono', monospace;
+      font-size: 11px;
+    }
+
+    /* ── Mid: Sync Grid ── */
+    .grid-container {
+      overflow-x: auto;
+    }
+
+    .chain-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .chain-label {
+      width: 100px;
+      flex-shrink: 0;
+      font-weight: 600;
+      color: #f0f6fc;
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .cubes {
+      display: flex;
+      gap: 3px;
+      align-items: center;
+      overflow-x: auto;
+      flex: 1;
+      min-width: 0;
+      padding-bottom: 4px;
+    }
+
+    .cube {
+      width: 28px;
+      height: 28px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.1s, box-shadow 0.1s;
+      position: relative;
+    }
+
+    .cube:hover {
+      transform: scale(1.2);
+      z-index: 1;
+    }
+
+    .cube.selected {
+      box-shadow: 0 0 0 2px #58a6ff;
+      transform: scale(1.15);
+      z-index: 1;
+    }
+
+    .cube.success {
+      background: #238636;
+      color: #aff5b4;
+    }
+
+    .cube.failed {
+      background: #da3633;
+      color: #ffa198;
+    }
+
+    .cube.pending {
+      background: #30363d;
+      color: #8b949e;
+    }
+
+    .cube .retry-badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      background: #f85149;
+      color: #fff;
+      font-size: 8px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .grid-legend {
+      display: flex;
+      gap: 16px;
+      margin-top: 12px;
+      font-size: 11px;
+      color: #8b949e;
+    }
+
+    .grid-legend span {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+
+    /* ── Bottom: Detail Panel ── */
+    .detail-panel {
+      display: none;
+    }
+
+    .detail-panel.visible {
+      display: block;
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .detail-item {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 10px 14px;
+    }
+
+    .detail-label {
+      color: #8b949e;
+      font-size: 10px;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    .detail-value {
+      color: #f0f6fc;
+      font-size: 12px;
+      word-break: break-all;
+    }
+
+    .attempts-list {
+      margin-top: 12px;
+    }
+
+    .attempt {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid #21262d;
+      font-size: 12px;
+    }
+
+    .attempt:last-child {
+      border-bottom: none;
+    }
+
+    .attempt-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .attempt-dot.ok {
+      background: #3fb950;
+    }
+
+    .attempt-dot.err {
+      background: #f85149;
+    }
+
+    .attempt-time {
+      color: #8b949e;
+      flex-shrink: 0;
+      width: 160px;
+    }
+
+    .attempt-detail {
+      flex: 1;
+    }
+
+    /* ── Footer: System Errors ── */
+    .errors-toggle {
+      background: none;
+      border: 1px solid #30363d;
+      color: #8b949e;
+      padding: 6px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      font-family: inherit;
+      margin-bottom: 12px;
+    }
+
+    .errors-toggle:hover {
+      color: #c9d1d9;
+      border-color: #58a6ff;
+    }
+
+    .errors-list {
+      display: none;
+    }
+
+    .errors-list.visible {
+      display: block;
+    }
+
+    .error-row {
+      display: flex;
+      gap: 12px;
+      padding: 6px 0;
+      border-bottom: 1px solid #21262d;
+      font-size: 12px;
+    }
+
+    .error-time {
+      color: #8b949e;
+      flex-shrink: 0;
+      width: 160px;
+    }
+
+    .error-type {
+      color: #f85149;
+      flex-shrink: 0;
+      width: 120px;
+      text-transform: uppercase;
+      font-size: 10px;
+    }
+
+    .error-msg {
+      color: #c9d1d9;
+      flex: 1;
+    }
+
+    /* ── Misc ── */
+    .refresh-indicator {
+      position: fixed;
+      top: 12px;
+      right: 24px;
+      font-size: 11px;
+      color: #484f58;
+    }
+
+    .chain-summary {
+      display: flex;
+      gap: 16px;
+      margin-top: 8px;
+      font-size: 11px;
+      color: #8b949e;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>Committee Sync Dashboard</h1>
+  <p style="color: #484f58; margin-bottom: 20px; font-size: 11px;">
+    Syncs ORBS L3 committee state to EVM chains
+    &mdash; <span id="refresh-time">auto-refreshes every 30s</span>
+  </p>
+
+  <!-- ══════════ TOP: Current Committee ══════════ -->
+  <div class="section" id="committee-section">
+    <h2>Current Committee</h2>
+    <div class="committee-header">
+      <div class="stat">
+        <div class="stat-label">Latest Nonce</div>
+        <div class="stat-value" id="latest-nonce">12</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Last Changed</div>
+        <div class="stat-value" id="last-changed">2026-04-16 12:27 UTC</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Members</div>
+        <div class="stat-value" id="member-count">3</div>
+      </div>
+    </div>
+
+    <table class="members-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Orbs Address</th>
+          <th>Eth Address</th>
+          <th>IP</th>
+          <th>Links</th>
+        </tr>
+      </thead>
+      <tbody id="members-body">
+        <tr><td colspan="5" style="color:#484f58">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ══════════ MID: Sync Grid ══════════ -->
+  <div class="section" id="grid-section">
+    <h2>Sync History</h2>
+    <div class="grid-container" id="grid-container">
+      <div style="color:#484f58">Loading...</div>
+    </div>
+
+    <div class="grid-legend">
+      <span><span class="legend-dot" style="background:#238636"></span> Synced</span>
+      <span><span class="legend-dot" style="background:#da3633"></span> Failed (retrying)</span>
+      <span><span class="legend-dot" style="background:#30363d"></span> Pending</span>
+    </div>
+
+    <div class="chain-summary" id="chain-summary"></div>
+  </div>
+
+  <!-- ══════════ BOTTOM: Detail Panel ══════════ -->
+  <div class="section detail-panel" id="detail-section">
+    <h2>Sync Detail &mdash; <span id="detail-title"></span></h2>
+    <div class="detail-grid" id="detail-grid"></div>
+    <div id="detail-attempts"></div>
+  </div>
+
+  <!-- ══════════ FOOTER: System Errors ══════════ -->
+  <div class="section" id="errors-section">
+    <button class="errors-toggle" onclick="toggleErrors()">System Errors (<span id="error-count">0</span>)</button>
+    <div class="errors-list" id="errors-list"></div>
+  </div>
+
+  <script>
+    const EXPLORERS = {
+      ethereum: 'https://etherscan.io',
+      arbitrum: 'https://arbiscan.io',
+    };
+
+    function explorerUrl(chain) { return EXPLORERS[chain.toLowerCase()] || EXPLORERS.ethereum; }
+    function truncAddr(a) { return a ? a.slice(0, 8) + '...' + a.slice(-6) : ''; }
+    function fmtDate(d) { return new Date(d).toISOString().replace('T', ' ').replace(/\.\d+Z/, ' UTC'); }
+    function fmtGas(gasUsed, gasPrice) {
+      if (!gasUsed || !gasPrice) return '-';
+      const cost = (BigInt(gasUsed) * BigInt(gasPrice));
+      const eth = Number(cost) / 1e18;
+      const gwei = Number(BigInt(gasPrice)) / 1e9;
+      return `${Number(gasUsed).toLocaleString()} @ ${gwei.toFixed(1)} gwei (${eth.toFixed(6)} ETH)`;
+    }
+
+    // ── Committee ──
+    async function loadCommittee() {
+      try {
+        const data = await fetch('/api/committee').then(r => r.json());
+        document.getElementById('latest-nonce').textContent = data.nonce ?? '-';
+        document.getElementById('last-changed').textContent = data.createdAt ? fmtDate(data.createdAt) : '-';
+        document.getElementById('member-count').textContent = (data.members || []).length;
+
+        const tbody = document.getElementById('members-body');
+        if (!data.members || data.members.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" style="color:#484f58">No committee data</td></tr>';
+          return;
+        }
+        tbody.innerHTML = data.members.map((m, i) => {
+          const orbs = m.orbsAddress || '';
+          const eth = m.ethAddress || '';
+          const ip = m.ip || '-';
+          const isZeroEth = !eth || eth === '0x' || /^0x0+$/.test(eth);
+          return `<tr>
+            <td>${i + 1}</td>
+            <td class="addr"><a href="https://etherscan.io/address/${orbs}" target="_blank">${truncAddr(orbs)}</a></td>
+            <td class="addr" style="${isZeroEth ? 'color:#484f58' : ''}">${truncAddr(eth)}</td>
+            <td>${ip}</td>
+            <td>${ip !== '-' ? `<a href="http://${ip}/services/management-service/status" target="_blank">status</a>` : '-'}</td>
+          </tr>`;
+        }).join('');
+      } catch (e) { console.error('Failed to load committee:', e); }
+    }
+
+    // ── Sync Grid ──
+    async function loadGrid() {
+      try {
+        const { grid, summary } = await fetch('/api/sync-grid?limit=50').then(r => r.json());
+        const container = document.getElementById('grid-container');
+
+        // Group grid entries by chain
+        const byChain = {};
+        const allNonces = new Set();
+        for (const entry of grid) {
+          if (!byChain[entry.chainName]) byChain[entry.chainName] = {};
+          byChain[entry.chainName][entry.nonce] = entry;
+          allNonces.add(entry.nonce);
+        }
+        const nonces = [...allNonces].sort((a, b) => a - b);
+        const chains = Object.keys(byChain).sort();
+
+        if (nonces.length === 0) {
+          container.innerHTML = '<div style="color:#484f58">No sync data yet</div>';
+        } else {
+          container.innerHTML = chains.map(chain => {
+            const cubes = nonces.map(n => {
+              const entry = byChain[chain]?.[n];
+              if (!entry) return `<div class="cube pending" data-chain="${chain}" data-nonce="${n}" onclick="selectCube(this)">${n}</div>`;
+              const cls = entry.success ? 'success' : 'failed';
+              const badge = entry.failedAttempts > 0 && !entry.success
+                ? `<span class="retry-badge">${entry.failedAttempts}</span>` : '';
+              return `<div class="cube ${cls}" data-chain="${chain}" data-nonce="${n}" onclick="selectCube(this)">${n}${badge}</div>`;
+            }).join('');
+            return `<div class="chain-row"><div class="chain-label">${chain}</div><div class="cubes">${cubes}</div></div>`;
+          }).join('');
+        }
+
+        // Summary
+        const sumEl = document.getElementById('chain-summary');
+        sumEl.innerHTML = summary.map(s =>
+          `<span>${s.chainName}: nonce ${s.latestSyncedNonce ?? '-'} &mdash; ${s.totalSuccesses} synced, ${s.totalFailures} failed</span>`
+        ).join('<span>|</span>');
+      } catch (e) { console.error('Failed to load grid:', e); }
+    }
+
+    // ── Cube Detail ──
+    async function selectCube(el) {
+      document.querySelectorAll('.cube').forEach(c => c.classList.remove('selected'));
+      el.classList.add('selected');
+
+      const chain = el.dataset.chain;
+      const nonce = el.dataset.nonce;
+      const explorer = explorerUrl(chain);
+
+      document.getElementById('detail-title').textContent = `${chain} nonce ${nonce}`;
+      document.getElementById('detail-section').classList.add('visible');
+
+      try {
+        const data = await fetch(`/api/sync-detail?chain=${chain}&nonce=${nonce}`).then(r => r.json());
+        const successAttempt = data.attempts.find(a => a.success);
+        const failed = data.attempts.filter(a => !a.success).length;
+        const succeeded = data.attempts.filter(a => a.success).length;
+
+        const detailGrid = document.getElementById('detail-grid');
+        detailGrid.innerHTML = `
+          <div class="detail-item"><div class="detail-label">Chain</div><div class="detail-value">${chain}</div></div>
+          <div class="detail-item"><div class="detail-label">Nonce</div><div class="detail-value">${nonce}</div></div>
+          <div class="detail-item"><div class="detail-label">TX Hash</div><div class="detail-value">${
+            successAttempt?.txHash
+              ? `<a href="${explorer}/tx/${successAttempt.txHash}" target="_blank">${truncAddr(successAttempt.txHash)}</a>`
+              : '-'
+          }</div></div>
+          <div class="detail-item"><div class="detail-label">Gas</div><div class="detail-value">${
+            successAttempt ? fmtGas(successAttempt.gasUsed, successAttempt.effectiveGasPrice) : '-'
+          }</div></div>
+          <div class="detail-item"><div class="detail-label">Committee</div><div class="detail-value">${
+            data.committee ? `${data.committee.members?.length || 0} member(s), ${data.signatures?.length || 0} sig(s)` : '-'
+          }</div></div>
+          <div class="detail-item"><div class="detail-label">Attempts</div><div class="detail-value">${failed} failed, ${succeeded} success</div></div>
+        `;
+
+        const attEl = document.getElementById('detail-attempts');
+        attEl.innerHTML = '<div class="attempts-list">' + data.attempts.map(a => `
+          <div class="attempt">
+            <div class="attempt-dot ${a.success ? 'ok' : 'err'}"></div>
+            <div class="attempt-time">${fmtDate(a.createdAt)}</div>
+            <div class="attempt-detail">${
+              a.success
+                ? `TX: <a href="${explorer}/tx/${a.txHash}" target="_blank">${truncAddr(a.txHash)}</a> &mdash; ${fmtGas(a.gasUsed, a.effectiveGasPrice)}`
+                : (a.errorMessage || 'Unknown error')
+            }</div>
+          </div>
+        `).join('') + '</div>';
+      } catch (e) { console.error('Failed to load detail:', e); }
+    }
+
+    // ── System Errors ──
+    async function loadErrors() {
+      try {
+        const errors = await fetch('/api/errors?limit=50').then(r => r.json());
+        document.getElementById('error-count').textContent = errors.length;
+        const list = document.getElementById('errors-list');
+        if (errors.length === 0) {
+          list.innerHTML = '<div style="color:#484f58;padding:8px 0">No errors</div>';
+          return;
+        }
+        list.innerHTML = errors.map(e => `
+          <div class="error-row">
+            <div class="error-time">${fmtDate(e.createdAt)}</div>
+            <div class="error-type">${e.errorType}</div>
+            <div class="error-msg">${e.message}</div>
+          </div>
+        `).join('');
+      } catch (e) { console.error('Failed to load errors:', e); }
+    }
+
+    function toggleErrors() {
+      document.getElementById('errors-list').classList.toggle('visible');
+    }
+
+    // ── Init + auto-refresh ──
+    async function refresh() {
+      await Promise.all([loadCommittee(), loadGrid(), loadErrors()]);
+      document.getElementById('refresh-time').textContent =
+        `last refresh: ${new Date().toLocaleTimeString()}`;
+    }
+
+    refresh();
+    setInterval(refresh, 30000);
+  </script>
+
+</body>
+
+</html>

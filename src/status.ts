@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import * as path from 'path';
 import {
   StatusResponse,
   ActivityLog,
@@ -6,6 +7,14 @@ import {
   ChainSyncStats,
   CommitteeData,
 } from './types';
+import {
+  getLatestCommitteeForStatus,
+  getSyncGrid,
+  getSyncDetail,
+  getChainSummary,
+  getRecentSystemErrors,
+  getNonceWithSignatures,
+} from './db';
 
 export class StatusServer {
   private app: express.Application;
@@ -25,6 +34,10 @@ export class StatusServer {
   }
 
   private setupRoutes(): void {
+    // Serve static HTML dashboard
+    this.app.use(express.static(path.join(process.cwd(), 'public')));
+
+    // Legacy JSON status endpoint
     this.app.get('/status', (req: Request, res: Response) => {
       res.json(this.getStatus());
     });
@@ -32,6 +45,79 @@ export class StatusServer {
     // Health check endpoint
     this.app.get('/health', (req: Request, res: Response) => {
       res.json({ status: 'ok' });
+    });
+
+    // ── New API endpoints (DB-backed) ──
+
+    this.app.get('/api/committee', async (_req: Request, res: Response) => {
+      try {
+        const data = await getLatestCommitteeForStatus();
+        if (!data) {
+          res.json({ nonce: null, members: [], signatures: [], createdAt: null });
+          return;
+        }
+        res.json({
+          nonce: data.nonce,
+          members: data.committeeJson.members || [],
+          config: data.committeeJson.config || [],
+          signatures: data.signatures,
+          createdAt: data.createdAt,
+        });
+      } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch committee' });
+      }
+    });
+
+    this.app.get('/api/sync-grid', async (req: Request, res: Response) => {
+      try {
+        const limit = parseInt(req.query.limit as string) || 50;
+        const grid = await getSyncGrid(limit);
+        const summary = await getChainSummary();
+        res.json({ grid, summary });
+      } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch sync grid' });
+      }
+    });
+
+    this.app.get('/api/sync-detail', async (req: Request, res: Response) => {
+      try {
+        const chain = req.query.chain as string;
+        const nonce = parseInt(req.query.nonce as string);
+        if (!chain || isNaN(nonce)) {
+          res.status(400).json({ error: 'chain and nonce query params required' });
+          return;
+        }
+        const attempts = await getSyncDetail(chain, nonce);
+        const committeeData = await getNonceWithSignatures(nonce);
+        res.json({
+          chain,
+          nonce,
+          attempts,
+          committee: committeeData?.committeeJson || null,
+          signatures: committeeData?.signatures || [],
+        });
+      } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch sync detail' });
+      }
+    });
+
+    this.app.get('/api/chain-summary', async (_req: Request, res: Response) => {
+      try {
+        const summary = await getChainSummary();
+        res.json(summary);
+      } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch chain summary' });
+      }
+    });
+
+    this.app.get('/api/errors', async (req: Request, res: Response) => {
+      try {
+        const limit = parseInt(req.query.limit as string) || 50;
+        const errors = await getRecentSystemErrors(limit);
+        res.json(errors);
+      } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch errors' });
+      }
     });
   }
 
@@ -41,19 +127,21 @@ export class StatusServer {
     });
   }
 
+  // ── In-memory methods (kept for backward compat with /status) ──
+
   updateCommittee(committee: CommitteeData): void {
     this.currentCommittee = committee;
   }
 
   recordActivity(activity: ActivityLog): void {
-    this.activityLog.unshift(activity); // Add to beginning
+    this.activityLog.unshift(activity);
     if (this.activityLog.length > this.MAX_ACTIVITY_LOGS) {
       this.activityLog = this.activityLog.slice(0, this.MAX_ACTIVITY_LOGS);
     }
   }
 
   recordError(error: ErrorLog): void {
-    this.errorLog.unshift(error); // Add to beginning
+    this.errorLog.unshift(error);
     if (this.errorLog.length > this.MAX_ERROR_LOGS) {
       this.errorLog = this.errorLog.slice(0, this.MAX_ERROR_LOGS);
     }
@@ -75,7 +163,6 @@ export class StatusServer {
       lastSyncStatus: null,
     };
 
-    // Update chainName in case it changed
     existing.chainName = chainName;
     existing.totalSyncs += success ? 1 : 0;
     existing.lastSync = new Date().toISOString();
@@ -105,4 +192,3 @@ export class StatusServer {
     };
   }
 }
-

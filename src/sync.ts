@@ -6,6 +6,8 @@ import { ChainConfig, CommitteeSyncConfigItem, SignatureData } from './types';
 export interface SyncResult {
   success: boolean;
   transactionHash?: string;
+  gasUsed?: string;
+  effectiveGasPrice?: string;
   error?: string;
 }
 
@@ -124,6 +126,8 @@ export class EVMSyncer {
       return {
         success: true,
         transactionHash: receipt.hash,
+        gasUsed: receipt.gasUsed?.toString(),
+        effectiveGasPrice: (receipt.gasPrice ?? tx.gasPrice)?.toString(),
       };
     } catch (error) {
       return {

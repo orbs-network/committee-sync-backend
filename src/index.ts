@@ -7,7 +7,7 @@ import { SignatureCollector } from './collector';
 import { Client, Node } from '@orbs-network/orbs-client';
 import { EVMSyncer } from './sync';
 import { StatusServer } from './status';
-import { initDb, runMigrations, storeSignedCommittee, getLatestStoredNonce, getNoncesInRange, getNonceWithSignatures } from './db';
+import { initDb, runMigrations, storeSignedCommittee, getLatestStoredNonce, getNoncesInRange, getNonceWithSignatures, recordSyncAttempt, recordSystemError } from './db';
 import { committeeHash } from './hash';
 import type { CommitteeData, CommitteeSyncConfigItem } from './types';
 
@@ -285,6 +285,18 @@ class CommitteeSyncService {
             );
             const evmResult = await this.evmSyncer.syncCommittee(evmChain, payload);
 
+            // Record sync attempt to DB (success or failure)
+            await recordSyncAttempt({
+              chainName: evmChain.chainName,
+              contractAddress: evmChain.contractAddress,
+              nonce: newNonce,
+              success: evmResult.success,
+              txHash: evmResult.transactionHash,
+              gasUsed: evmResult.gasUsed,
+              effectiveGasPrice: evmResult.effectiveGasPrice,
+              errorMessage: evmResult.error,
+            });
+
             if (evmResult.success) {
               console.log(`✓ Synced nonce ${newNonce} to Ethereum. Tx: ${evmResult.transactionHash}`);
               this.statusServer.updateSyncStats(
@@ -383,6 +395,18 @@ class CommitteeSyncService {
                 committeeAddresses,
                 config,
                 signatures: p.signatures,
+              });
+
+              // Record sync attempt to DB
+              await recordSyncAttempt({
+                chainName: chain.chainName,
+                contractAddress: chain.contractAddress,
+                nonce: p.nonce,
+                success: result.success,
+                txHash: result.transactionHash,
+                gasUsed: result.gasUsed,
+                effectiveGasPrice: result.effectiveGasPrice,
+                errorMessage: result.error,
               });
 
               if (result.success) {
