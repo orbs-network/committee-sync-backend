@@ -1,5 +1,59 @@
 import { CommitteeData, CommitteeMember, SignatureData } from './types';
 
+const MIN_VOTERS = 3;
+
+/**
+ * Validates that collected signatures agree on the same committeeHash.
+ * Groups signatures by committeeHash, takes the majority group, and
+ * returns it only if its size >= MIN_VOTERS. Otherwise throws.
+ *
+ * This prevents submitting a TX with signatures that were signed over
+ * different committee views (e.g. during node propagation delays).
+ */
+export function validateSignatureVoters(signatures: SignatureData[]): SignatureData[] {
+  const groups = new Map<string, SignatureData[]>();
+
+  for (const sig of signatures) {
+    const hash = sig.committeeHash ?? 'unknown';
+    if (!groups.has(hash)) groups.set(hash, []);
+    groups.get(hash)!.push(sig);
+  }
+
+  // Find the majority group (largest)
+  let majorityHash = '';
+  let majorityGroup: SignatureData[] = [];
+  for (const [hash, sigs] of groups) {
+    if (sigs.length > majorityGroup.length) {
+      majorityHash = hash;
+      majorityGroup = sigs;
+    }
+  }
+
+  // Log all groups for traceability
+  const groupSummary = [...groups.entries()]
+    .map(([hash, sigs]) => `${hash.slice(0, 10)}...=${sigs.length} sig(s)`)
+    .join(', ');
+  console.log(`Signature voter groups: [${groupSummary}]`);
+
+  if (groups.size > 1) {
+    const discarded = signatures.length - majorityGroup.length;
+    console.warn(
+      `Committee hash mismatch: ${groups.size} different hashes seen. ` +
+      `Using majority group ${majorityHash.slice(0, 10)}... (${majorityGroup.length} sig(s)), ` +
+      `discarding ${discarded} sig(s) from minority group(s).`
+    );
+  }
+
+  if (majorityGroup.length < MIN_VOTERS) {
+    throw new Error(
+      `Insufficient signature consensus: majority group has ${majorityGroup.length} sig(s) ` +
+      `but minimum is ${MIN_VOTERS}. Groups: [${groupSummary}]`
+    );
+  }
+
+  return majorityGroup;
+}
+
 const LAMBDA_SCRIPT_BASE_URL =
   process.env.LAMBDA_SCRIPT_BASE_URL || 'service/vm-lambda/cmt-sync';
 
@@ -63,11 +117,14 @@ export class SignatureCollector {
       throw new Error('Invalid signature format in response');
     }
 
+    const committeeHash = data?.result?.committeeHash;
+
     const addr =
       member.orbsAddress.startsWith('0x') ? member.orbsAddress : `0x${member.orbsAddress}`;
     return {
       signature: signature.startsWith('0x') ? signature : `0x${signature}`,
       orbsAddress: addr,
+      committeeHash: typeof committeeHash === 'string' ? committeeHash : undefined,
     };
   }
 

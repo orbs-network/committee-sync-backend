@@ -35,6 +35,7 @@ export interface CommitteePayloadWithNonce {
 export interface SignatureData {
   signature: string; // Hex-encoded signature
   orbsAddress: string;
+  committeeHash?: string; // Hash of the committee the guardian sees
 }
 
 export interface ActivityLog {

@@ -3,7 +3,7 @@ import { initFileLogging } from './logger';
 initFileLogging();
 import { loadEnvConfig, loadChainConfig, getCachedChains, getEvmChain } from './config';
 import { CommitteeFetcher } from './committee';
-import { SignatureCollector } from './collector';
+import { SignatureCollector, validateSignatureVoters } from './collector';
 import { Client, Node } from '@orbs-network/orbs-client';
 import { EVMSyncer } from './sync';
 import { StatusServer } from './status';
@@ -245,17 +245,19 @@ class CommitteeSyncService {
             const committeeWithNodes = await this.committeeFetcher.enrichCommitteeWithNodeInfo(committee);
 
             try {
-              signatures = await this.signatureCollector.collectSignatures(committeeWithNodes, newNonce);
-              console.log(`Collected ${signatures.length} signatures`);
+              const rawSignatures = await this.signatureCollector.collectSignatures(committeeWithNodes, newNonce);
+              console.log(`Collected ${rawSignatures.length} signatures`);
+              signatures = validateSignatureVoters(rawSignatures);
+              console.log(`Validated ${signatures.length} signatures (consensus reached)`);
 
               this.statusServer.recordActivity({
                 timestamp: new Date().toISOString(),
                 type: 'signature_collection',
                 status: 'success',
-                details: `Collected ${signatures.length} signatures for nonce ${newNonce}`,
+                details: `Collected ${rawSignatures.length}, validated ${signatures.length} signatures for nonce ${newNonce}`,
               });
             } catch (error) {
-              const errorMsg = `Failed to collect signatures: ${error instanceof Error ? error.message : String(error)}`;
+              const errorMsg = `Failed to collect/validate signatures: ${error instanceof Error ? error.message : String(error)}`;
               console.error(errorMsg);
               this.statusServer.recordError({
                 timestamp: new Date().toISOString(),
