@@ -33,9 +33,14 @@ export function loadEnvConfig(): AppConfig {
     console.log('DEBUG mode: CHECK_INTERVAL forced to 10 seconds');
   }
 
-  const privateKey = process.env.PRIVATE_KEY;
-  if (!privateKey) {
-    throw new Error('PRIVATE_KEY environment variable is required');
+  const signerPrivateKey = process.env.CMT_SYNC_WALLET_MANAGER_SIGNER_PK;
+  if (!signerPrivateKey) {
+    throw new Error('CMT_SYNC_WALLET_MANAGER_SIGNER_PK environment variable is required');
+  }
+
+  const walletManagerUrl = process.env.WALLET_MANAGER_URL;
+  if (!walletManagerUrl) {
+    throw new Error('WALLET_MANAGER_URL environment variable is required');
   }
 
   const port = parseInt(process.env.PORT || '3000', 10);
@@ -46,7 +51,8 @@ export function loadEnvConfig(): AppConfig {
   return {
     seedIP,
     checkInterval,
-    privateKey,
+    signerPrivateKey,
+    walletManagerUrl,
     port,
     db: loadDbConfig(),
   };

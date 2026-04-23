@@ -2,6 +2,7 @@ import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ChainConfig, CommitteeSyncConfigItem, SignatureData } from './types';
+import { sendToWalletManager } from './wallet-manager';
 
 export interface SyncResult {
   success: boolean;
@@ -18,12 +19,16 @@ export interface SyncPayload {
 }
 
 export class EVMSyncer {
-  private privateKey: string;
+  private signerPrivateKey: string;
+  private walletManagerUrl: string;
   private abi: any[];
+  private iface: ethers.Interface;
 
-  constructor(privateKey: string) {
-    this.privateKey = privateKey;
+  constructor(signerPrivateKey: string, walletManagerUrl: string) {
+    this.signerPrivateKey = signerPrivateKey;
+    this.walletManagerUrl = walletManagerUrl;
     this.abi = this.loadABI();
+    this.iface = new ethers.Interface(this.abi);
   }
 
   private loadABI(): any[] {
@@ -86,10 +91,6 @@ export class EVMSyncer {
     payload: SyncPayload
   ): Promise<SyncResult> {
     try {
-      const provider = new ethers.JsonRpcProvider(chain.rpcUrl);
-      const wallet = new ethers.Wallet(this.privateKey, provider);
-      const contract = new ethers.Contract(chain.contractAddress, this.abi, wallet);
-
       const committeeAddresses = payload.committeeAddresses.map(a =>
         a.startsWith('0x') ? a : `0x${a}`
       );
@@ -98,36 +99,34 @@ export class EVMSyncer {
       );
       const newConfig = payload.config ?? [];
 
-      let gasEstimate: bigint;
-      try {
-        gasEstimate = await contract.sync.estimateGas(
-          committeeAddresses,
-          newConfig,
-          signatureBytes
-        );
-      } catch (estimateError) {
-        throw new Error(
-          `Gas estimation failed: ${estimateError instanceof Error ? estimateError.message : String(estimateError)}`
-        );
-      }
-
-      const tx = await contract.sync(
+      // Encode the sync() call data
+      const txData = this.iface.encodeFunctionData('sync', [
         committeeAddresses,
         newConfig,
         signatureBytes,
-        { gasLimit: gasEstimate + BigInt(10000) }
+      ]);
+
+      console.log(`[wallet-manager] Encoding sync() for ${chain.chainName} → ${chain.contractAddress}`);
+
+      const result = await sendToWalletManager(
+        chain.contractAddress,
+        txData,
+        this.signerPrivateKey,
+        this.walletManagerUrl,
+        { chainName: chain.chainName, orderDuration: 300 },
       );
 
-      const receipt = await tx.wait();
-      if (!receipt) {
-        throw new Error('Transaction receipt is null');
+      if (result.error) {
+        return {
+          success: false,
+          error: result.error,
+        };
       }
 
       return {
         success: true,
-        transactionHash: receipt.hash,
-        gasUsed: receipt.gasUsed?.toString(),
-        effectiveGasPrice: (receipt.gasPrice ?? tx.gasPrice)?.toString(),
+        transactionHash: result.txHash,
+        gasUsed: result.gasUsed,
       };
     } catch (error) {
       return {
@@ -137,4 +136,3 @@ export class EVMSyncer {
     }
   }
 }
-

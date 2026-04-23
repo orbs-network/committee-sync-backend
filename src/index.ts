@@ -47,7 +47,7 @@ class CommitteeSyncService {
 
     this.committeeFetcher = new CommitteeFetcher(this.orbsClient);
     this.signatureCollector = new SignatureCollector();
-    this.evmSyncer = new EVMSyncer(this.config.privateKey);
+    this.evmSyncer = new EVMSyncer(this.config.signerPrivateKey, this.config.walletManagerUrl);
     this.statusServer = new StatusServer(this.config.port);
   }
 

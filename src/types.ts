@@ -91,7 +91,8 @@ export interface DbConfig {
 export interface AppConfig {
   seedIP: string;
   checkInterval: number;
-  privateKey: string;
+  signerPrivateKey: string;
+  walletManagerUrl: string;
   port: number;
   db: DbConfig;
 }
