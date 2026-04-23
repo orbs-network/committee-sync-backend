@@ -1,7 +1,5 @@
 import { ethers } from 'ethers';
 
-const RPCM_URL = process.env.RPCM_URL || '';
-
 export interface WalletManagerConfig {
   [chainId: string]: {
     chainName: string;
@@ -73,29 +71,3 @@ export async function sendToWalletManager(
   }
 }
 
-/**
- * Wait for a transaction to be mined.
- */
-export async function waitForTxMine(
-  chainId: string,
-  txHash: string,
-  maxRetries = 20,
-  waitTime = 15000,
-): Promise<boolean> {
-  const provider = new ethers.JsonRpcProvider(RPCM_URL + chainId);
-
-  for (let i = 0; i < maxRetries; i++) {
-    await new Promise((resolve) => setTimeout(resolve, waitTime));
-
-    try {
-      const receipt = await provider.getTransactionReceipt(txHash);
-      if (receipt) {
-        return receipt.status === 1;
-      }
-    } catch (error) {
-      console.error(`Error getting receipt for ${txHash}: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  return false;
-}
