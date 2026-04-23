@@ -2,7 +2,7 @@ import { ethers } from 'ethers';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ChainConfig, CommitteeSyncConfigItem, SignatureData } from './types';
-import { sendToWalletManager } from './wallet-manager';
+import { sendToWalletManager, waitForTxMine } from './wallet-manager';
 
 export interface SyncResult {
   success: boolean;
@@ -116,17 +116,29 @@ export class EVMSyncer {
         { chainName: chain.chainName, orderDuration: 300 },
       );
 
-      if (result.error) {
+      if (result.error || !result.txHash) {
         return {
           success: false,
-          error: result.error,
+          error: result.error || 'No txHash returned from wallet-manager',
+        };
+      }
+
+      console.log(`[wallet-manager] TX submitted: ${result.txHash}, waiting for mining...`);
+      const mineResult = await waitForTxMine(chain.rpcUrl, result.txHash);
+
+      if (!mineResult.mined) {
+        return {
+          success: false,
+          transactionHash: result.txHash,
+          error: `TX ${result.txHash} was not mined or reverted on-chain`,
         };
       }
 
       return {
         success: true,
         transactionHash: result.txHash,
-        gasUsed: result.gasUsed,
+        gasUsed: mineResult.gasUsed,
+        effectiveGasPrice: mineResult.effectiveGasPrice,
       };
     } catch (error) {
       return {

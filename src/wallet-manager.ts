@@ -71,3 +71,40 @@ export async function sendToWalletManager(
   }
 }
 
+/**
+ * Wait for a transaction to be mined by polling for the receipt.
+ * Uses the chain's RPC URL directly.
+ */
+export async function waitForTxMine(
+  rpcUrl: string,
+  txHash: string,
+  maxRetries = 20,
+  waitTime = 15000,
+): Promise<{ mined: boolean; gasUsed?: string; effectiveGasPrice?: string }> {
+  const provider = new ethers.JsonRpcProvider(rpcUrl);
+
+  for (let i = 0; i < maxRetries; i++) {
+    await new Promise((resolve) => setTimeout(resolve, waitTime));
+
+    try {
+      const receipt = await provider.getTransactionReceipt(txHash);
+      if (receipt) {
+        const success = receipt.status === 1;
+        if (!success) {
+          console.error(`[waitForTxMine] TX ${txHash} reverted on-chain`);
+        }
+        return {
+          mined: success,
+          gasUsed: receipt.gasUsed?.toString(),
+          effectiveGasPrice: receipt.gasPrice?.toString(),
+        };
+      }
+    } catch (error) {
+      console.error(`[waitForTxMine] Error polling receipt for ${txHash}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  console.error(`[waitForTxMine] TX ${txHash} not mined after ${maxRetries} retries`);
+  return { mined: false };
+}
+
