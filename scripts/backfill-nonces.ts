@@ -22,7 +22,7 @@ import { loadEnvConfig, loadChainConfig } from '../src/config';
 import { CommitteeFetcher } from '../src/committee';
 import { SignatureCollector } from '../src/collector';
 import { EVMSyncer } from '../src/sync';
-import { Client, Node } from '@orbs-network/orbs-client';
+import { Client, Node } from '@orbs-network/client';
 import {
   initDb,
   runMigrations,

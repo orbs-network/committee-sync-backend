@@ -12,7 +12,7 @@ import { loadEnvConfig } from './src/config';
 import { CommitteeFetcher } from './src/committee';
 import { SignatureCollector } from './src/collector';
 import { EVMSyncer, SyncPayload } from './src/sync';
-import { Client, Node } from '@orbs-network/orbs-client';
+import { Client, Node } from '@orbs-network/client';
 import type { CommitteeSyncConfigItem } from './src/types';
 
 const ANVIL_RPC = 'http://127.0.0.1:8545';

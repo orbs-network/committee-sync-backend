@@ -18,10 +18,10 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@orbs-network/orbs-client": "file:../orbs-client",
+    "@orbs-network/client": "^1.1.0",
+    "dotenv": "^16.3.1",
     "ethers": "^6.0.0",
     "express": "^4.18.2",
-    "dotenv": "^16.3.1",
     "pg": "^8.11.3"
   },
   "devDependencies": {

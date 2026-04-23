@@ -4,7 +4,7 @@ initFileLogging();
 import { loadEnvConfig, loadChainConfig, getCachedChains, getEvmChain } from './config';
 import { CommitteeFetcher } from './committee';
 import { SignatureCollector, validateSignatureVoters } from './collector';
-import { Client, Node } from '@orbs-network/orbs-client';
+import { Client, Node } from '@orbs-network/client';
 import { EVMSyncer } from './sync';
 import { StatusServer } from './status';
 import { initDb, runMigrations, storeSignedCommittee, getLatestStoredNonce, getNoncesInRange, getNonceWithSignatures, recordSyncAttempt, recordSystemError } from './db';

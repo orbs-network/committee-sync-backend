@@ -1,5 +1,5 @@
 import { CommitteeData, CommitteeMember } from './types';
-import { Client, Node } from '@orbs-network/orbs-client';
+import { Client, Node } from '@orbs-network/client';
 const LAMBDA_SCRIPT_BASE_URL = process.env.LAMBDA_SCRIPT_BASE_URL || 'service/vm-lambda/cmt-sync';
 export class CommitteeFetcher {
   private client: Client;

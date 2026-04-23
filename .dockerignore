@@ -1,0 +1,10 @@
+node_modules
+dist
+logs
+.env
+db/data
+.git
+.DS_Store
+ignore/
+.vscode
+deploy/db-export.sql
