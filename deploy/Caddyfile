@@ -1,3 +1,3 @@
-cmt-sync.orbsnetwork.com {
-    reverse_proxy backend:80
+cmt-sync.orbs.network {
+reverse_proxy backend:80
 }
