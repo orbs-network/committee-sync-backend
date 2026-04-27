@@ -61,9 +61,13 @@ if [ "$SG_ID" = "None" ] || [ -z "$SG_ID" ]; then
   aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$SG_ID" \
     --protocol tcp --port 22 --cidr 0.0.0.0/0
 
-  # HTTP (dashboard)
+  # HTTP (dashboard + ACME challenge)
   aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$SG_ID" \
     --protocol tcp --port 80 --cidr 0.0.0.0/0
+
+  # HTTPS (dashboard via Caddy + Let's Encrypt)
+  aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$SG_ID" \
+    --protocol tcp --port 443 --cidr 0.0.0.0/0
 
   echo "Security group created: $SG_ID"
 else
@@ -143,5 +147,5 @@ echo "  4. cp deploy/.env.example .env && vi .env"
 echo "  5. cd deploy && docker compose up -d"
 echo "  6. docker compose logs -f backend"
 echo ""
-echo "Ports open: 22 (SSH), 80 (HTTP/Dashboard)"
+echo "Ports open: 22 (SSH), 80 (HTTP/ACME), 443 (HTTPS/Dashboard)"
 echo "============================================"
