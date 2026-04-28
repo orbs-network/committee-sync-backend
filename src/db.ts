@@ -1,5 +1,6 @@
 import { Pool, PoolClient } from 'pg';
 import { SignatureData } from './types';
+import { notifier } from './notifier';
 
 export interface CommitteePayload {
   nonce: number;
@@ -198,6 +199,7 @@ export async function recordSystemError(errorType: string, message: string, chai
      VALUES ($1, $2, $3)`,
     [errorType, message, chainName ?? null]
   );
+  notifier.error(errorType, message, { chain: chainName });
 }
 
 export interface SyncGridEntry {

@@ -48,6 +48,9 @@ export function loadEnvConfig(): AppConfig {
     throw new Error('PORT must be a positive number');
   }
 
+  const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramChatId = process.env.TELEGRAM_CHAT_ID;
+
   return {
     seedIP,
     checkInterval,
@@ -55,6 +58,8 @@ export function loadEnvConfig(): AppConfig {
     walletManagerUrl,
     port,
     db: loadDbConfig(),
+    telegramBotToken,
+    telegramChatId,
   };
 }
 

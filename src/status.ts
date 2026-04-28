@@ -15,6 +15,7 @@ import {
   getRecentSystemErrors,
   getNonceWithSignatures,
 } from './db';
+import { notifier } from './notifier';
 
 export class StatusServer {
   private app: express.Application;
@@ -145,6 +146,7 @@ export class StatusServer {
     if (this.errorLog.length > this.MAX_ERROR_LOGS) {
       this.errorLog = this.errorLog.slice(0, this.MAX_ERROR_LOGS);
     }
+    notifier.error(error.type, error.message, { chain: error.chainName });
   }
 
   updateSyncStats(

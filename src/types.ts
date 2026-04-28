@@ -95,5 +95,7 @@ export interface AppConfig {
   walletManagerUrl: string;
   port: number;
   db: DbConfig;
+  telegramBotToken?: string;
+  telegramChatId?: string;
 }
 

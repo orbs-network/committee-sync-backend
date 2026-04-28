@@ -8,6 +8,7 @@ import { Client, Node } from '@orbs-network/client';
 import { EVMSyncer } from './sync';
 import { StatusServer } from './status';
 import { initDb, runMigrations, storeSignedCommittee, getLatestStoredNonce, getNoncesInRange, getNonceWithSignatures, recordSyncAttempt, recordSystemError } from './db';
+import { notifier } from './notifier';
 import { committeeHash } from './hash';
 import type { CommitteeData, CommitteeSyncConfigItem } from './types';
 
@@ -54,6 +55,9 @@ class CommitteeSyncService {
 
   async start(): Promise<void> {
     console.log('Starting Committee Sync Service...');
+
+    // Initialize Telegram notifier (no-op if env vars unset)
+    notifier.init(this.config.telegramBotToken, this.config.telegramChatId);
 
     try {
       // Initialize database
@@ -301,6 +305,11 @@ class CommitteeSyncService {
 
             if (evmResult.success) {
               console.log(`✓ Synced nonce ${newNonce} to Ethereum. Tx: ${evmResult.transactionHash}`);
+              notifier.success(
+                'new committee',
+                `Nonce: ${newNonce} (${committee.members.length} members)`,
+                evmResult.transactionHash ? [`https://etherscan.io/tx/${evmResult.transactionHash}`] : []
+              );
               this.statusServer.updateSyncStats(
                 evmChain.chainName,
                 evmChain.rpcUrl,
