@@ -102,6 +102,11 @@ class CommitteeSyncService {
 
       console.log(`Service started. Checking every ${this.config.checkInterval} seconds.`);
       console.log(`Status API available at http://localhost:${this.config.port}/status`);
+
+      await notifier.success(
+        'service started',
+        `Checking every ${this.config.checkInterval}s`,
+      );
     } catch (error) {
       console.error('Failed to start service:', error);
       this.statusServer.recordError({
@@ -486,20 +491,33 @@ class CommitteeSyncService {
 
 // Start the service
 const service = new CommitteeSyncService();
-service.start().catch((error) => {
+service.start().catch(async (error) => {
+  const msg = error instanceof Error ? error.message : String(error);
   console.error('Fatal error:', error);
+  await notifier.error('fatal', `Service crashed during startup: ${msg}`);
   process.exit(1);
 });
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\nReceived SIGINT, shutting down gracefully...');
+async function gracefulShutdown(signal: string): Promise<void> {
+  console.log(`\nReceived ${signal}, shutting down gracefully...`);
+  await notifier.error('shutdown', `Service received ${signal} — shutting down`);
   service.stop();
   process.exit(0);
+}
+
+process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
+process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
+
+// Catch unhandled exceptions
+process.on('uncaughtException', async (error) => {
+  console.error('Uncaught exception:', error);
+  await notifier.error('crash', `Uncaught exception: ${error.message}`);
+  process.exit(1);
 });
 
-process.on('SIGTERM', () => {
-  console.log('\nReceived SIGTERM, shutting down gracefully...');
-  service.stop();
-  process.exit(0);
+process.on('unhandledRejection', async (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.error('Unhandled rejection:', reason);
+  await notifier.error('crash', `Unhandled rejection: ${msg}`);
+  process.exit(1);
 });
