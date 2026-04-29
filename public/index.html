@@ -116,12 +116,14 @@
     /* ── Mid: Sync Grid ── */
     .grid-container {
       overflow-x: auto;
+      padding-bottom: 4px;
     }
 
     .chain-row {
       display: flex;
       align-items: center;
       margin-bottom: 8px;
+      width: max-content;
     }
 
     .chain-label {
@@ -131,16 +133,17 @@
       color: #f0f6fc;
       font-size: 12px;
       text-transform: uppercase;
+      position: sticky;
+      left: 0;
+      background: #161b22;
+      padding-right: 8px;
+      z-index: 1;
     }
 
     .cubes {
       display: flex;
       gap: 3px;
       align-items: center;
-      overflow-x: auto;
-      flex: 1;
-      min-width: 0;
-      padding-bottom: 4px;
     }
 
     .cube {
@@ -492,7 +495,7 @@
     // ── Sync Grid ──
     async function loadGrid() {
       try {
-        const { grid, summary } = await fetch('/api/sync-grid?limit=50').then(r => r.json());
+        const { grid, summary, chainOrder } = await fetch('/api/sync-grid?limit=50').then(r => r.json());
         const container = document.getElementById('grid-container');
 
         // Group grid entries by chain
@@ -504,7 +507,12 @@
           allNonces.add(entry.nonce);
         }
         const nonces = [...allNonces].sort((a, b) => a - b);
-        const chains = Object.keys(byChain).sort();
+
+        // Use chainOrder from server (ethereum first, then chain.json order).
+        // Append any chains in DB that aren't in chain.json (shouldn't happen normally).
+        const seen = new Set(chainOrder || []);
+        const extraChains = Object.keys(byChain).filter(c => !seen.has(c)).sort();
+        const chains = [...(chainOrder || []), ...extraChains];
 
         if (nonces.length === 0) {
           container.innerHTML = '<div style="color:#484f58">No sync data yet</div>';
@@ -521,10 +529,9 @@
             return `<div class="chain-row"><div class="chain-label">${chain}</div><div class="cubes">${cubes}</div></div>`;
           }).join('');
 
-          // Scroll each cubes row to the rightmost (latest nonce) position
-          container.querySelectorAll('.cubes').forEach(c => {
-            c.scrollLeft = c.scrollWidth;
-          });
+          // Single horizontal scroll on the outer container — all chain rows scroll together.
+          // Scroll to rightmost (latest nonce) on initial load.
+          container.scrollLeft = container.scrollWidth;
         }
 
         // Summary

@@ -15,6 +15,7 @@ import {
   getRecentSystemErrors,
   getNonceWithSignatures,
 } from './db';
+import { loadChainConfig, getCachedChains } from './config';
 import { notifier } from './notifier';
 
 export class StatusServer {
@@ -74,7 +75,24 @@ export class StatusServer {
         const limit = parseInt(req.query.limit as string) || 50;
         const grid = await getSyncGrid(limit);
         const summary = await getChainSummary();
-        res.json({ grid, summary });
+
+        // Determine chain order: from chain.json, with ethereum first
+        let chainOrder: string[] = [];
+        try {
+          const chains = getCachedChains() ?? loadChainConfig();
+          chainOrder = chains.map((c) => c.chainName);
+        } catch {
+          // Fallback: use chains seen in grid data
+          chainOrder = [...new Set(grid.map((g) => g.chainName))];
+        }
+        // Force ethereum first
+        chainOrder = chainOrder.sort((a, b) => {
+          if (a.toLowerCase() === 'ethereum') return -1;
+          if (b.toLowerCase() === 'ethereum') return 1;
+          return 0;
+        });
+
+        res.json({ grid, summary, chainOrder });
       } catch (error) {
         res.status(500).json({ error: 'Failed to fetch sync grid' });
       }
