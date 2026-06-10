@@ -187,6 +187,12 @@
       color: #8b949e;
     }
 
+    .cube.debug {
+      background: #30363d;
+      color: #d29922;
+      border: 1px dashed #d29922;
+    }
+
     .cube .retry-badge {
       position: absolute;
       top: -4px;
@@ -381,24 +387,26 @@
     &mdash; <span id="refresh-time">auto-refreshes every 30s</span>
   </p>
 
-  <!-- ══════════ TOP: Current Committee ══════════ -->
-  <div class="section" id="committee-section">
-    <h2>Current Committee</h2>
-    <div class="committee-header">
-      <div class="stat">
-        <div class="stat-label">Latest Nonce</div>
-        <div class="stat-value" id="latest-nonce">12</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Last Changed</div>
-        <div class="stat-value" id="last-changed">2026-04-16 12:27 UTC</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Members</div>
-        <div class="stat-value" id="member-count">3</div>
-      </div>
+  <!-- ══════════ TOP: Sync History (primary selector) ══════════ -->
+  <div class="section" id="grid-section">
+    <h2>Sync History</h2>
+    <div class="grid-container" id="grid-container">
+      <div style="color:#484f58">Loading...</div>
     </div>
 
+    <div class="grid-legend">
+      <span><span class="legend-dot" style="background:#238636"></span> Synced</span>
+      <span><span class="legend-dot" style="background:#da3633"></span> Failed (retrying)</span>
+      <span><span class="legend-dot" style="background:#30363d"></span> Pending</span>
+      <span><span class="legend-dot" style="background:#30363d;border:1px dashed #d29922"></span> Debug (tx not sent)</span>
+    </div>
+
+    <div class="chain-summary" id="chain-summary"></div>
+  </div>
+
+  <!-- ══════════ MID: Committee #N ══════════ -->
+  <div class="section" id="committee-section">
+    <h2 id="committee-heading">Committee</h2>
     <div class="members-table-wrap">
       <table class="members-table">
         <thead>
@@ -411,29 +419,36 @@
           </tr>
         </thead>
         <tbody id="members-body">
-          <tr><td colspan="5" style="color:#484f58">Loading...</td></tr>
+          <tr><td colspan="5" style="color:#484f58">Select a sync to view...</td></tr>
         </tbody>
       </table>
     </div>
   </div>
 
-  <!-- ══════════ MID: Sync Grid ══════════ -->
-  <div class="section" id="grid-section">
-    <h2>Sync History</h2>
-    <div class="grid-container" id="grid-container">
-      <div style="color:#484f58">Loading...</div>
+  <!-- ══════════ MID: Config #N ══════════ -->
+  <div class="section" id="config-section">
+    <h2 id="config-heading">Config</h2>
+    <div class="members-table-wrap">
+      <table class="members-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>TAPP ID</th>
+            <th>ETH Address</th>
+            <th>Valid</th>
+            <th>QVL</th>
+            <th>MRENCLAVE</th>
+            <th>Links</th>
+          </tr>
+        </thead>
+        <tbody id="config-body">
+          <tr><td colspan="7" style="color:#484f58">Select a sync to view...</td></tr>
+        </tbody>
+      </table>
     </div>
-
-    <div class="grid-legend">
-      <span><span class="legend-dot" style="background:#238636"></span> Synced</span>
-      <span><span class="legend-dot" style="background:#da3633"></span> Failed (retrying)</span>
-      <span><span class="legend-dot" style="background:#30363d"></span> Pending</span>
-    </div>
-
-    <div class="chain-summary" id="chain-summary"></div>
   </div>
 
-  <!-- ══════════ BOTTOM: Detail Panel ══════════ -->
+  <!-- ══════════ BOTTOM: Sync Detail (chain-specific TX info) ══════════ -->
   <div class="section detail-panel" id="detail-section">
     <h2>Sync Detail &mdash; <span id="detail-title"></span></h2>
     <div class="detail-grid" id="detail-grid"></div>
@@ -463,33 +478,59 @@
       return `${Number(gasUsed).toLocaleString()} @ ${gwei.toFixed(1)} gwei (${eth.toFixed(6)} ETH)`;
     }
 
-    // ── Committee ──
-    async function loadCommittee() {
-      try {
-        const data = await fetch('/api/committee').then(r => r.json());
-        document.getElementById('latest-nonce').textContent = data.nonce ?? '-';
-        document.getElementById('last-changed').textContent = data.createdAt ? fmtDate(data.createdAt) : '-';
-        document.getElementById('member-count').textContent = (data.members || []).length;
+    function renderCommitteeFor(nonce, committeeJson) {
+      document.getElementById('committee-heading').textContent = `Committee #${nonce}`;
+      const tbody = document.getElementById('members-body');
+      const members = committeeJson?.members || [];
+      if (members.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="color:#484f58">No committee data</td></tr>';
+        return;
+      }
+      tbody.innerHTML = members.map((m, i) => {
+        const orbs = m.orbsAddress || '';
+        const eth = m.ethAddress || '';
+        const ip = m.ip || '-';
+        const isZeroEth = !eth || eth === '0x' || /^0x0+$/.test(eth);
+        return `<tr>
+          <td>${i + 1}</td>
+          <td class="addr"><a href="https://etherscan.io/address/${orbs}" target="_blank">${truncAddr(orbs)}</a></td>
+          <td class="addr" style="${isZeroEth ? 'color:#484f58' : ''}">${truncAddr(eth)}</td>
+          <td>${ip}</td>
+          <td>${ip !== '-' ? `<a href="http://${ip}/services/management-service/status" target="_blank">status</a>` : '-'}</td>
+        </tr>`;
+      }).join('');
+    }
 
-        const tbody = document.getElementById('members-body');
-        if (!data.members || data.members.length === 0) {
-          tbody.innerHTML = '<tr><td colspan="5" style="color:#484f58">No committee data</td></tr>';
-          return;
-        }
-        tbody.innerHTML = data.members.map((m, i) => {
-          const orbs = m.orbsAddress || '';
-          const eth = m.ethAddress || '';
-          const ip = m.ip || '-';
-          const isZeroEth = !eth || eth === '0x' || /^0x0+$/.test(eth);
-          return `<tr>
-            <td>${i + 1}</td>
-            <td class="addr"><a href="https://etherscan.io/address/${orbs}" target="_blank">${truncAddr(orbs)}</a></td>
-            <td class="addr" style="${isZeroEth ? 'color:#484f58' : ''}">${truncAddr(eth)}</td>
-            <td>${ip}</td>
-            <td>${ip !== '-' ? `<a href="http://${ip}/services/management-service/status" target="_blank">status</a>` : '-'}</td>
-          </tr>`;
-        }).join('');
-      } catch (e) { console.error('Failed to load committee:', e); }
+    function renderConfigFor(nonce, committeeJson) {
+      document.getElementById('config-heading').textContent = `Config #${nonce}`;
+      const tbody = document.getElementById('config-body');
+      const config = committeeJson?.config || [];
+      if (config.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" style="color:#484f58">No config entries</td></tr>';
+        return;
+      }
+      tbody.innerHTML = config.map((c, i) => {
+        const tappId = c.tapp_id || c.tappId || '-';
+        const eth = c.ethereum_address || c.ethAddress || '';
+        const valid = c.valid === true ? '✓' : (c.valid === false ? '✗' : '-');
+        const validColor = c.valid === true ? '#3fb950' : (c.valid === false ? '#f85149' : '#8b949e');
+        const qvl = c.qvl_status || '-';
+        const mrenclave = c.mrenclave || '';
+        const pkUrl = c.getpk_url || '';
+        return `<tr title="${[
+          c.mr_signer ? 'mr_signer: ' + c.mr_signer : '',
+          c.expected_mrenclave ? 'expected: ' + c.expected_mrenclave : '',
+          c.error ? 'error: ' + c.error : '',
+        ].filter(Boolean).join(' | ')}">
+          <td>${i + 1}</td>
+          <td>${tappId}</td>
+          <td class="addr">${eth ? `<a href="https://etherscan.io/address/${eth}" target="_blank">${truncAddr(eth)}</a>` : '-'}</td>
+          <td style="color:${validColor};font-weight:600">${valid}</td>
+          <td>${qvl}</td>
+          <td class="addr" title="${mrenclave}">${mrenclave ? mrenclave.slice(0, 12) + '…' : '-'}</td>
+          <td>${pkUrl ? `<a href="${pkUrl}" target="_blank">getPK</a>` : '-'}</td>
+        </tr>`;
+      }).join('');
     }
 
     // ── Sync Grid ──
@@ -521,10 +562,12 @@
             const cubes = nonces.map(n => {
               const entry = byChain[chain]?.[n];
               if (!entry) return `<div class="cube pending" data-chain="${chain}" data-nonce="${n}" onclick="selectCube(this)">${n}</div>`;
-              const cls = entry.success ? 'success' : 'failed';
+              const isDebug = entry.latestTxHash && entry.latestTxHash.startsWith('0xdebug');
+              const cls = isDebug ? 'debug' : (entry.success ? 'success' : 'failed');
+              const tip = isDebug ? ' title="DEBUG mode: tx was not actually sent on-chain"' : '';
               const badge = entry.failedAttempts > 0 && !entry.success
                 ? `<span class="retry-badge">${entry.failedAttempts}</span>` : '';
-              return `<div class="cube ${cls}" data-chain="${chain}" data-nonce="${n}" onclick="selectCube(this)">${n}${badge}</div>`;
+              return `<div class="cube ${cls}" data-chain="${chain}" data-nonce="${n}"${tip} onclick="selectCube(this)">${n}${badge}</div>`;
             }).join('');
             return `<div class="chain-row"><div class="chain-label">${chain}</div><div class="cubes">${cubes}</div></div>`;
           }).join('');
@@ -532,6 +575,20 @@
           // Single horizontal scroll on the outer container — all chain rows scroll together.
           // Scroll to rightmost (latest nonce) on initial load.
           container.scrollLeft = container.scrollWidth;
+
+          // Auto-select the latest nonce cube on the first chain (ethereum) so
+          // Committee #N / Config #N populate by default. Only do this if nothing
+          // is already selected (preserve user's selection across refreshes).
+          if (!container.querySelector('.cube.selected')) {
+            const latestNonce = nonces[nonces.length - 1];
+            const firstChain = chains.find(c => byChain[c]?.[latestNonce]);
+            if (firstChain) {
+              const cube = container.querySelector(
+                `.cube[data-chain="${firstChain}"][data-nonce="${latestNonce}"]`
+              );
+              if (cube) selectCube(cube);
+            }
+          }
         }
 
         // Summary
@@ -556,6 +613,11 @@
 
       try {
         const data = await fetch(`/api/sync-detail?chain=${chain}&nonce=${nonce}`).then(r => r.json());
+
+        // Render committee + config for this nonce
+        renderCommitteeFor(nonce, data.committee);
+        renderConfigFor(nonce, data.committee);
+
         const successAttempt = data.attempts.find(a => a.success);
         const failed = data.attempts.filter(a => !a.success).length;
         const succeeded = data.attempts.filter(a => a.success).length;
@@ -619,7 +681,7 @@
 
     // ── Init + auto-refresh ──
     async function refresh() {
-      await Promise.all([loadCommittee(), loadGrid(), loadErrors()]);
+      await Promise.all([loadGrid(), loadErrors()]);
       document.getElementById('refresh-time').textContent =
         `last refresh: ${new Date().toLocaleTimeString()}`;
     }

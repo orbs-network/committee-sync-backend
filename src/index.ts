@@ -2,20 +2,19 @@ import 'dotenv/config';
 import { initFileLogging } from './logger';
 initFileLogging();
 import { loadEnvConfig, loadChainConfig, getCachedChains, getEvmChain } from './config';
-import { CommitteeFetcher } from './committee';
-import { SignatureCollector, validateSignatureVoters } from './collector';
+import { PayloadFetcher } from './payload';
+import { SignatureCollector, validateSignedPayloads } from './collector';
 import { Client, Node } from '@orbs-network/client';
 import { EVMSyncer } from './sync';
 import { StatusServer } from './status';
-import { initDb, runMigrations, storeSignedCommittee, getLatestStoredNonce, getNoncesInRange, getNonceWithSignatures, recordSyncAttempt, recordSystemError } from './db';
+import { initDb, runMigrations, storeSignedCommittee, getLatestStoredNonce, getNoncesInRange, getNonceWithSignatures, recordSyncAttempt } from './db';
 import { notifier } from './notifier';
-import { committeeHash } from './hash';
-import type { CommitteeData, CommitteeSyncConfigItem } from './types';
+import type { CommitteeSyncConfigItem } from './types';
 
 class CommitteeSyncService {
   private config: ReturnType<typeof loadEnvConfig>;
   private orbsClient: Client;
-  private committeeFetcher: CommitteeFetcher;
+  private payloadFetcher: PayloadFetcher;
   private signatureCollector: SignatureCollector;
   private evmSyncer: EVMSyncer;
   private statusServer: StatusServer;
@@ -27,16 +26,25 @@ class CommitteeSyncService {
     // Load configuration
     this.config = loadEnvConfig();
 
-    // Initialize components
+    // Initialize ORBS client.
+    //
+    // Dev / subnet mode: DEV_NODE_HOST is set → inject a localNode and SKIP
+    // seed discovery. getCommitteeNodes() will return only [localNode] —
+    // perfect for a single-node subnet where there's no management-service.
+    //
+    // Prod / mainnet: DEV_NODE_HOST is unset → orbsClient.init() discovers
+    // the mainnet committee from SEED_IP via management-service/status.
+    // To switch to mainnet, simply unset DEV_NODE_HOST in .env.
     this.orbsClient = new Client(this.config.seedIP);
     if (process.env.DEV_NODE_HOST) {
+      console.log(`Subnet mode: using DEV_NODE_HOST=${process.env.DEV_NODE_HOST} as localNode`);
       this.orbsClient.localNode = new Node({
-        name: "local_v5_dev",
+        name: 'local_subnet',
         ip: process.env.DEV_NODE_HOST,
         port: 80,
-        website: "",
-        guardianAddress: "",
-        nodeAddress: "string",
+        website: '',
+        guardianAddress: '',
+        nodeAddress: 'local_subnet',
         reputation: 1,
         effectiveStake: 1,
         enterTime: 0,
@@ -46,7 +54,7 @@ class CommitteeSyncService {
       });
     }
 
-    this.committeeFetcher = new CommitteeFetcher(this.orbsClient);
+    this.payloadFetcher = new PayloadFetcher(this.orbsClient);
     this.signatureCollector = new SignatureCollector();
     this.evmSyncer = new EVMSyncer(this.config.signerPrivateKey, this.config.walletManagerUrl);
     this.statusServer = new StatusServer(this.config.port);
@@ -66,35 +74,32 @@ class CommitteeSyncService {
       await runMigrations();
       console.log('Database initialized successfully');
 
-      // Hydrate lastCommittee from DB so the first check doesn't falsely
+      // Hydrate last payload hash from DB so the first check doesn't falsely
       // detect a change just because in-memory state is empty after restart.
       const latestNonce = await getLatestStoredNonce();
       if (latestNonce !== null) {
         const stored = await getNonceWithSignatures(latestNonce);
-        if (stored) {
-          const members = stored.committeeJson.members.map((m: any) => ({
-            ...m,
-            ethAddress: m.ethAddress || '',
-            orbsAddress: m.orbsAddress || '',
-          }));
-          this.committeeFetcher.setLastCommittee({
-            members,
-            config: (stored.committeeJson.config ?? []) as CommitteeSyncConfigItem[],
-            timestamp: 0,
-          });
-          console.log(`Hydrated lastCommittee from DB (nonce ${latestNonce}, ${members.length} member(s))`);
+        if (stored?.committeeHash) {
+          this.payloadFetcher.setLastPayloadHash(stored.committeeHash);
+          console.log(`Hydrated lastPayloadHash from DB (nonce ${latestNonce}, hash ${stored.committeeHash.slice(0, 10)}...)`);
         }
       } else {
-        console.log('No stored committee in DB — first check will treat committee as new');
+        console.log('No stored payload in DB — first check will treat payload as new');
       }
 
-      // Initialize ORBS client once
-      console.log('Initializing ORBS client...');
-      await this.orbsClient.init();
-      if (!this.orbsClient.initialized()) {
-        throw new Error('Failed to initialize ORBS client');
+      // Initialize ORBS client only when we need to discover mainnet nodes via
+      // management-service. In subnet mode (localNode set) we skip this — the
+      // subnet doesn't expose management-service and we don't need it anyway.
+      if (this.orbsClient.localNode) {
+        console.log('Skipping orbsClient.init() — using localNode only');
+      } else {
+        console.log('Initializing ORBS client...');
+        await this.orbsClient.init();
+        if (!this.orbsClient.initialized()) {
+          throw new Error('Failed to initialize ORBS client');
+        }
+        console.log('ORBS client initialized successfully');
       }
-      console.log('ORBS client initialized successfully');
 
       // Start periodic check loop
       this.isRunning = true;
@@ -173,40 +178,45 @@ class CommitteeSyncService {
         console.log(`Using cached chain configuration (${chains.length} chain(s))`);
       }
 
-      // Fetch current committee
-      let committee: CommitteeData | undefined;
-      try {
-        committee = await this.committeeFetcher.getCurrentCommittee();
-        console.log(`Fetched committee with ${committee.members.length} members`);
+      // Determine the reference nonce for change detection: the latest nonce
+      // we've successfully synced (per DB). The lambda's hash is computed over
+      // (nonce, committee, config), so we ask it for the hash at the same nonce
+      // we last synced — if (committee, config) is unchanged, the hash matches
+      // what we stored; if changed, it differs.
+      const referenceNonce = await getLatestStoredNonce();
+      let hasChanged: boolean;
 
-        this.statusServer.recordActivity({
-          timestamp: new Date().toISOString(),
-          type: 'committee_fetch',
-          status: 'success',
-          details: `Fetched committee with ${committee.members.length} members`,
-        });
-      } catch (error) {
-        const errorMsg = `Failed to fetch committee: ${error instanceof Error ? error.message : String(error)}`;
-        console.error(errorMsg);
-        this.statusServer.recordError({
-          timestamp: new Date().toISOString(),
-          type: 'committee_fetch',
-          message: errorMsg,
-        });
-        return;
+      if (referenceNonce === null) {
+        // Empty DB → no reference → force a sync to bootstrap state
+        console.log('No prior sync in DB — forcing initial sync to establish baseline');
+        hasChanged = true;
+      } else {
+        let currentHash: string;
+        try {
+          currentHash = await this.payloadFetcher.getSyncHash(referenceNonce);
+          console.log(`Current syncHash at nonce ${referenceNonce}: ${currentHash}`);
+
+          this.statusServer.recordActivity({
+            timestamp: new Date().toISOString(),
+            type: 'committee_fetch',
+            status: 'success',
+            details: `Fetched syncHash ${currentHash.slice(0, 10)}... at nonce ${referenceNonce}`,
+          });
+        } catch (error) {
+          const errorMsg = `Failed to fetch syncHash: ${error instanceof Error ? error.message : String(error)}`;
+          console.error(errorMsg);
+          this.statusServer.recordError({
+            timestamp: new Date().toISOString(),
+            type: 'committee_fetch',
+            message: errorMsg,
+          });
+          return;
+        }
+
+        hasChanged = this.payloadFetcher.hasSyncPayloadChanged(currentHash);
+        console.log(`hasSyncPayloadChanged: ${hasChanged}`);
       }
 
-      if (!committee) return;
-
-      // Log fetched committee orbsAddresses for traceability
-      console.log(
-        `Committee orbsAddresses (${committee.members.length}): ` +
-        committee.members.map((m) => m.orbsAddress).join(', ')
-      );
-
-      // Check if committee has changed
-      const hasChanged = this.committeeFetcher.hasCommitteeChanged(committee);
-      console.log(`hasCommitteeChanged: ${hasChanged}`);
       if (hasChanged) {
         const evmChain = getEvmChain(chains);
         if (!evmChain) {
@@ -239,34 +249,46 @@ class CommitteeSyncService {
           const newNonce = contractNonce + 1;
 
           // Check if we already have signatures for this nonce in DB (e.g. from a previous
-          // cycle that collected but failed to sync, or from the backfill script).
+          // cycle that collected but failed to sync).
           const existingPayload = await getNonceWithSignatures(newNonce);
-          let signatures;
-          let committeeJson;
+          let validated: {
+            committee: string[];
+            config: CommitteeSyncConfigItem[];
+            configEncoded: Array<[string, string, string]>;
+            payloadHash: string;
+            signatures: any[];
+          } | undefined;
 
           if (existingPayload) {
-            console.log(`Nonce ${newNonce}: found existing signatures in DB (${existingPayload.signatures.length} sig(s)), skipping collection`);
-            signatures = existingPayload.signatures;
-            committeeJson = existingPayload.committeeJson;
+            console.log(`Nonce ${newNonce}: found existing signed payload in DB (${existingPayload.signatures.length} sig(s)), skipping collection`);
+            const members = existingPayload.committeeJson.members as any[];
+            validated = {
+              committee: members.map((m: any) =>
+                m.orbsAddress.startsWith('0x') ? m.orbsAddress : `0x${m.orbsAddress}`
+              ),
+              config: (existingPayload.committeeJson.config ?? []) as CommitteeSyncConfigItem[],
+              configEncoded: (existingPayload.committeeJson.configEncoded ?? []) as Array<[string, string, string]>,
+              payloadHash: existingPayload.committeeHash,
+              signatures: existingPayload.signatures,
+            };
           } else {
-            console.log(`Committee has changed, collecting signatures for nonce ${newNonce} (contract at ${contractNonce})...`);
-
-            const committeeWithNodes = await this.committeeFetcher.enrichCommitteeWithNodeInfo(committee);
+            console.log(`Payload changed, collecting signed payloads for nonce ${newNonce} (contract at ${contractNonce})...`);
 
             try {
-              const rawSignatures = await this.signatureCollector.collectSignatures(committeeWithNodes, newNonce);
-              console.log(`Collected ${rawSignatures.length} signatures`);
-              signatures = validateSignatureVoters(rawSignatures);
-              console.log(`Validated ${signatures.length} signatures (consensus reached)`);
+              const nodes = await this.payloadFetcher.getCommitteeNodes();
+              const signedPayloads = await this.signatureCollector.collectSignedPayloads(nodes, newNonce);
+              console.log(`Collected ${signedPayloads.length} signed payload(s)`);
+              validated = validateSignedPayloads(signedPayloads);
+              console.log(`Validated: ${validated.signatures.length} sig(s), payloadHash ${validated.payloadHash.slice(0, 10)}...`);
 
               this.statusServer.recordActivity({
                 timestamp: new Date().toISOString(),
                 type: 'signature_collection',
                 status: 'success',
-                details: `Collected ${rawSignatures.length}, validated ${signatures.length} signatures for nonce ${newNonce}`,
+                details: `Collected ${signedPayloads.length}, validated ${validated.signatures.length} sig(s) for nonce ${newNonce}`,
               });
             } catch (error) {
-              const errorMsg = `Failed to collect/validate signatures: ${error instanceof Error ? error.message : String(error)}`;
+              const errorMsg = `Failed to collect/validate signed payloads: ${error instanceof Error ? error.message : String(error)}`;
               console.error(errorMsg);
               this.statusServer.recordError({
                 timestamp: new Date().toISOString(),
@@ -274,25 +296,22 @@ class CommitteeSyncService {
                 message: errorMsg,
               });
             }
-
-            committeeJson = {
-              members: committee.members,
-              config: committee.config ?? [],
-              timestamp: committee.timestamp,
-            };
           }
 
-          if (signatures && signatures.length > 0) {
-            const committeeAddresses = (committeeJson!.members as any[]).map((m: any) =>
-              (m.orbsAddress as string).startsWith('0x') ? m.orbsAddress : `0x${m.orbsAddress}`
-            );
-            const config = (committee.config ?? []) as CommitteeSyncConfigItem[];
-            const payload = { committeeAddresses, config, signatures };
+          if (validated && validated.signatures.length > 0) {
+            const committeeAddresses = validated.committee;
+            // For the on-chain TX we use the wire-format (configEncoded).
+            // The rich `config` is kept around to store in the DB for the dashboard.
+            const payload = {
+              committeeAddresses,
+              config: validated.configEncoded as any,
+              signatures: validated.signatures,
+            };
 
             // Sync to Ethereum first: store only after successful on-chain update
             console.log(
               `${evmChain.chainName}: submitting fresh sync() for nonce ${newNonce} ` +
-              `(${committeeAddresses.length} member(s), ${signatures.length} sig(s), ${config.length} config item(s))`
+              `(${committeeAddresses.length} member(s), ${validated.signatures.length} sig(s), ${validated.configEncoded.length} config item(s))`
             );
             const evmResult = await this.evmSyncer.syncCommittee(evmChain, payload);
 
@@ -312,7 +331,7 @@ class CommitteeSyncService {
               console.log(`✓ Synced nonce ${newNonce} to Ethereum. Tx: ${evmResult.transactionHash}`);
               notifier.success(
                 'new committee',
-                `Nonce: ${newNonce} (${committee.members.length} members)`,
+                `Nonce: ${newNonce} (${committeeAddresses.length} members)`,
                 evmResult.transactionHash ? [`https://etherscan.io/tx/${evmResult.transactionHash}`] : []
               );
               this.statusServer.updateSyncStats(
@@ -331,17 +350,28 @@ class CommitteeSyncService {
                 details: `Nonce ${newNonce} synced to Ethereum. Tx: ${evmResult.transactionHash}`,
               });
 
-              // Update in-memory state immediately after successful on-chain sync,
+              // Update in-memory hash immediately after successful on-chain sync,
               // regardless of DB outcome, to prevent false change detection next cycle.
-              this.statusServer.updateCommittee(committee);
-              this.committeeFetcher.setLastCommittee(committee);
+              this.payloadFetcher.setLastPayloadHash(validated.payloadHash);
 
-              const hash = committeeHash(committeeJson as any);
+              // Enrich addresses with node info for the dashboard, then store in DB.
+              // Store both forms: rich `config` for human/dashboard display, plus
+              // `configEncoded` (wire tuples) so we can replay the same payload
+              // to other chains during catch-up.
+              const enrichedMembers = await this.payloadFetcher.enrichAddressesWithMemberInfo(committeeAddresses);
+              const committeeJson = {
+                members: enrichedMembers,
+                config: validated.config,
+                configEncoded: validated.configEncoded,
+                timestamp: Date.now(),
+              };
+              this.statusServer.updateCommittee({ members: enrichedMembers, config: validated.config, timestamp: Date.now() });
+
               try {
-                await storeSignedCommittee(newNonce, hash, committeeJson as any, signatures);
-                console.log(`Stored signed committee for nonce ${newNonce} in DB`);
+                await storeSignedCommittee(newNonce, validated.payloadHash, committeeJson as any, validated.signatures);
+                console.log(`Stored signed payload for nonce ${newNonce} in DB`);
               } catch (dbError) {
-                const errorMsg = `Failed to store signed committee: ${dbError instanceof Error ? dbError.message : String(dbError)}`;
+                const errorMsg = `Failed to store signed payload: ${dbError instanceof Error ? dbError.message : String(dbError)}`;
                 console.error(errorMsg);
                 this.statusServer.recordError({
                   timestamp: new Date().toISOString(),
@@ -368,7 +398,7 @@ class CommitteeSyncService {
           }
         }
       } else {
-        console.log('Committee has not changed');
+        console.log('Sync payload has not changed');
       }
 
       // Sync missing nonces to each chain
@@ -400,16 +430,17 @@ class CommitteeSyncService {
               const committeeAddresses = p.committeeJson.members.map((m) =>
                 m.orbsAddress.startsWith('0x') ? m.orbsAddress : `0x${m.orbsAddress}`
               );
-              const config = (p.committeeJson.config ?? []) as CommitteeSyncConfigItem[];
+              // Use the encoded config (wire format tuples) for on-chain submission.
+              const configEncoded = ((p.committeeJson as any).configEncoded ?? []) as Array<[string, string, string]>;
 
               console.log(
                 `${chain.chainName}: submitting sync() for nonce ${p.nonce} ` +
-                `(${committeeAddresses.length} member(s), ${p.signatures.length} sig(s), ${config.length} config item(s))`
+                `(${committeeAddresses.length} member(s), ${p.signatures.length} sig(s), ${configEncoded.length} config item(s))`
               );
 
               const result = await this.evmSyncer.syncCommittee(chain, {
                 committeeAddresses,
-                config,
+                config: configEncoded as any,
                 signatures: p.signatures,
               });
 

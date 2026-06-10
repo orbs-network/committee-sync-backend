@@ -1,108 +1,162 @@
-import { CommitteeData, CommitteeMember, SignatureData } from './types';
+import { CommitteeSyncConfigItem, SignatureData } from './types';
+import { Node } from '@orbs-network/client';
 
-const MIN_VOTERS = 3;
+// Minimum number of guardians that must agree on the same payloadHash.
+// Defaults to 3 (mainnet). In subnet mode with a single guardian, set MIN_VOTERS=1.
+const MIN_VOTERS = parseInt(process.env.MIN_VOTERS || '3', 10);
+const LAMBDA_SCRIPT_BASE_URL =
+  process.env.LAMBDA_SCRIPT_BASE_URL || 'service/vm-lambda/cmt-sync';
 
 /**
- * Validates that collected signatures agree on the same committeeHash.
- * Groups signatures by committeeHash, takes the majority group, and
- * returns it only if its size >= MIN_VOTERS. Otherwise throws.
- *
- * This prevents submitting a TX with signatures that were signed over
- * different committee views (e.g. during node propagation delays).
+ * A signed sync payload returned by one guardian:
+ * - committee: the committee addresses the guardian sees
+ * - config: per-address config the guardian sees
+ * - payloadHash: hash over (committee, config) — must match what we submit
+ * - signature: ECDSA signature over the EIP-712 digest for (nonce, committee, config)
+ * - signerOrbsAddress: the orbs address of the guardian that signed
  */
-export function validateSignatureVoters(signatures: SignatureData[]): SignatureData[] {
-  const groups = new Map<string, SignatureData[]>();
+export interface SignedPayload {
+  committee: string[];
+  /** Rich, human-readable per-entry config — for DB / dashboard. */
+  config: CommitteeSyncConfigItem[];
+  /** Wire format: tuples [bytes32 key, address account, bytes value] — what we send to sync(). */
+  configEncoded: Array<[string, string, string]>;
+  payloadHash: string;
+  signature: string;
+  signerOrbsAddress: string;
+}
 
-  for (const sig of signatures) {
-    const hash = sig.committeeHash ?? 'unknown';
+/**
+ * Result of validating a set of signed payloads: the majority group's
+ * agreed-upon committee + config + hash, plus all sigs from that group.
+ */
+export interface ValidatedSyncPayload {
+  committee: string[];
+  config: CommitteeSyncConfigItem[];
+  configEncoded: Array<[string, string, string]>;
+  payloadHash: string;
+  signatures: SignatureData[];
+}
+
+/**
+ * Groups signed payloads by payloadHash, takes the majority group,
+ * and returns it only if its size >= MIN_VOTERS. Otherwise throws.
+ *
+ * The majority group is the source of truth: its members agree on
+ * committee+config, so we use those values to build the TX.
+ */
+export function validateSignedPayloads(payloads: SignedPayload[]): ValidatedSyncPayload {
+  const groups = new Map<string, SignedPayload[]>();
+
+  for (const p of payloads) {
+    const hash = p.payloadHash ?? 'unknown';
     if (!groups.has(hash)) groups.set(hash, []);
-    groups.get(hash)!.push(sig);
+    groups.get(hash)!.push(p);
   }
 
   // Find the majority group (largest)
   let majorityHash = '';
-  let majorityGroup: SignatureData[] = [];
-  for (const [hash, sigs] of groups) {
-    if (sigs.length > majorityGroup.length) {
+  let majorityGroup: SignedPayload[] = [];
+  for (const [hash, ps] of groups) {
+    if (ps.length > majorityGroup.length) {
       majorityHash = hash;
-      majorityGroup = sigs;
+      majorityGroup = ps;
     }
   }
 
-  // Log all groups for traceability
   const groupSummary = [...groups.entries()]
-    .map(([hash, sigs]) => `${hash.slice(0, 10)}...=${sigs.length} sig(s)`)
+    .map(([hash, ps]) => `${hash.slice(0, 10)}...=${ps.length}`)
     .join(', ');
-  console.log(`Signature voter groups: [${groupSummary}]`);
+  console.log(`Signed payload voter groups: [${groupSummary}]`);
 
   if (groups.size > 1) {
-    const discarded = signatures.length - majorityGroup.length;
+    const discarded = payloads.length - majorityGroup.length;
     console.warn(
-      `Committee hash mismatch: ${groups.size} different hashes seen. ` +
-      `Using majority group ${majorityHash.slice(0, 10)}... (${majorityGroup.length} sig(s)), ` +
-      `discarding ${discarded} sig(s) from minority group(s).`
+      `Payload hash mismatch: ${groups.size} different hashes seen. ` +
+      `Using majority group ${majorityHash.slice(0, 10)}... (${majorityGroup.length} payload(s)), ` +
+      `discarding ${discarded} from minority group(s).`
     );
   }
 
   if (majorityGroup.length < MIN_VOTERS) {
     throw new Error(
-      `Insufficient signature consensus: majority group has ${majorityGroup.length} sig(s) ` +
+      `Insufficient consensus: majority group has ${majorityGroup.length} payload(s) ` +
       `but minimum is ${MIN_VOTERS}. Groups: [${groupSummary}]`
     );
   }
 
-  return majorityGroup;
+  // All members of the majority agree, so use the first one's committee+config
+  const ref = majorityGroup[0];
+  return {
+    committee: ref.committee,
+    config: ref.config,
+    configEncoded: ref.configEncoded,
+    payloadHash: ref.payloadHash,
+    signatures: majorityGroup.map((p) => ({
+      signature: p.signature,
+      orbsAddress: p.signerOrbsAddress,
+      committeeHash: p.payloadHash,
+    })),
+  };
 }
 
-const LAMBDA_SCRIPT_BASE_URL =
-  process.env.LAMBDA_SCRIPT_BASE_URL || 'service/vm-lambda/cmt-sync';
-
-function buildServiceUrl(member: CommitteeMember, path: string): string {
-  const ip = member.ip;
-  const port = member.port ?? 80;
-  if (!ip) {
-    throw new Error(
-      `Committee member ${member.orbsAddress} has no ip - cannot fetch signature`
-    );
+function buildServiceUrl(node: Node, path: string): string {
+  if (!node.ip) {
+    throw new Error(`Node ${node.nodeAddress} has no ip - cannot fetch payload`);
   }
+  const port = node.port ?? 80;
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   const portPart = port === 0 ? '' : `:${port}`;
-  return `http://${ip}${portPart}/services${normalizedPath}`;
+  return `http://${node.ip}${portPart}/services${normalizedPath}`;
 }
 
 export class SignatureCollector {
   /**
-   * Collect signatures from committee members for the given nonce.
-   * Uses only the committee data passed in - each member must have ip (and optionally port)
-   * to make HTTP requests to getSignedCommittee.
+   * Calls getSignedPayload on each committee node. Returns the signed payloads
+   * (committee, config, hash, signature) from those that responded successfully.
+   * The caller then validates consensus across them.
    */
-  async collectSignatures(
-    committee: CommitteeData,
-    nonce: number
-  ): Promise<SignatureData[]> {
-    if (!committee.members?.length) {
-      throw new Error('No committee members to collect signatures from');
+  async collectSignedPayloads(nodes: Node[], nonce: number): Promise<SignedPayload[]> {
+    if (!nodes.length) {
+      throw new Error('No nodes to collect signed payloads from');
     }
 
-    const promises = committee.members.map((member) =>
-      this.fetchSignatureFromMember(member, nonce)
-    );
-
+    const promises = nodes.map((node) => this.fetchSignedPayload(node, nonce));
     const results = await Promise.allSettled(promises);
-    return this.collectResults(results, committee.members);
+
+    const payloads: SignedPayload[] = [];
+    const errors: Array<{ node: string; error: string }> = [];
+
+    results.forEach((result, i) => {
+      const node = nodes[i];
+      if (result.status === 'fulfilled') {
+        payloads.push(result.value);
+      } else {
+        errors.push({
+          node: node?.nodeAddress ?? node?.ip ?? 'unknown',
+          error: result.reason?.message ?? String(result.reason),
+        });
+      }
+    });
+
+    if (errors.length > 0) {
+      console.warn(`Failed to collect signed payload from ${errors.length} node(s):`, errors);
+    }
+
+    if (payloads.length === 0) {
+      throw new Error('Failed to collect any signed payloads from committee nodes');
+    }
+
+    return payloads;
   }
 
-  private async fetchSignatureFromMember(
-    member: CommitteeMember,
-    nonce: number
-  ): Promise<SignatureData> {
+  private async fetchSignedPayload(node: Node, nonce: number): Promise<SignedPayload> {
     const url = buildServiceUrl(
-      member,
-      `${LAMBDA_SCRIPT_BASE_URL}/getSignedCommittee?nonce=${nonce}`
+      node,
+      `${LAMBDA_SCRIPT_BASE_URL}/getSignedPayload?nonce=${nonce}`
     );
 
-    const response = await fetch(url);
-
+    const response = await fetch(url, { signal: AbortSignal.timeout(10000) });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
@@ -112,54 +166,42 @@ export class SignatureCollector {
       throw new Error(`Lambda error: ${data.error}`);
     }
 
-    const signature = data?.result?.signature;
-    if (!signature || typeof signature !== 'string') {
-      throw new Error('Invalid signature format in response');
+    const result = data?.result;
+    if (!result) {
+      throw new Error('Invalid response: missing result');
     }
 
-    const committeeHash = data?.result?.committeeHash;
+    const signature = result.signature;
+    if (typeof signature !== 'string' || !signature) {
+      throw new Error('Invalid signature in response');
+    }
 
-    const addr =
-      member.orbsAddress.startsWith('0x') ? member.orbsAddress : `0x${member.orbsAddress}`;
+    const payloadHash = result.payloadHash;
+    if (typeof payloadHash !== 'string' || !payloadHash) {
+      throw new Error('Invalid payloadHash in response');
+    }
+
+    if (!Array.isArray(result.committee)) {
+      throw new Error('Invalid committee in response: must be an array');
+    }
+
+    const config = Array.isArray(result.config) ? result.config : [];
+    const configEncoded = Array.isArray(result.configEncoded) ? result.configEncoded : [];
+
+    const signerOrbsAddress = (node.nodeAddress || '').toLowerCase();
+    const normalizedSigner = signerOrbsAddress.startsWith('0x')
+      ? signerOrbsAddress
+      : `0x${signerOrbsAddress}`;
+
     return {
+      committee: result.committee.map((a: string) =>
+        a.startsWith('0x') ? a : `0x${a}`
+      ),
+      config,
+      configEncoded,
+      payloadHash: payloadHash.startsWith('0x') ? payloadHash : `0x${payloadHash}`,
       signature: signature.startsWith('0x') ? signature : `0x${signature}`,
-      orbsAddress: addr,
-      committeeHash: typeof committeeHash === 'string' ? committeeHash : undefined,
+      signerOrbsAddress: normalizedSigner,
     };
-  }
-
-  private collectResults(
-    results: PromiseSettledResult<SignatureData>[],
-    members: CommitteeMember[]
-  ): SignatureData[] {
-    const signatures: SignatureData[] = [];
-    const errors: Array<{ member: string; error: string }> = [];
-
-    results.forEach((result, i) => {
-      const member = members[i];
-      if (result.status === 'fulfilled') {
-        signatures.push(result.value);
-      } else {
-        errors.push({
-          member: member?.orbsAddress ?? 'unknown',
-          error: result.reason?.message ?? String(result.reason),
-        });
-      }
-    });
-
-    if (errors.length > 0) {
-      console.warn(
-        `Failed to collect signatures from ${errors.length} member(s):`,
-        errors
-      );
-    }
-
-    if (signatures.length === 0) {
-      throw new Error(
-        'Failed to collect any signatures from committee members'
-      );
-    }
-
-    return signatures;
   }
 }

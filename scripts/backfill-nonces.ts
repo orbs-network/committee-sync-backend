@@ -19,8 +19,8 @@
 
 import 'dotenv/config';
 import { loadEnvConfig, loadChainConfig } from '../src/config';
-import { CommitteeFetcher } from '../src/committee';
-import { SignatureCollector } from '../src/collector';
+import { PayloadFetcher } from '../src/payload';
+import { SignatureCollector, validateSignedPayloads } from '../src/collector';
 import { EVMSyncer } from '../src/sync';
 import { Client, Node } from '@orbs-network/client';
 import {
@@ -31,8 +31,6 @@ import {
   getNonceWithSignatures,
   closeDb,
 } from '../src/db';
-import { committeeHash } from '../src/hash';
-import type { CommitteeSyncConfigItem } from '../src/types';
 
 async function main() {
   const chainName = process.argv[2];
@@ -73,9 +71,9 @@ async function main() {
   }
   await orbsClient.init();
 
-  const committeeFetcher = new CommitteeFetcher(orbsClient);
+  const payloadFetcher = new PayloadFetcher(orbsClient);
   const signatureCollector = new SignatureCollector();
-  const evmSyncer = new EVMSyncer(config.privateKey);
+  const evmSyncer = new EVMSyncer(config.signerPrivateKey, config.walletManagerUrl);
 
   // Determine range
   const contractNonce = await evmSyncer.readContractNonce(chain);
@@ -99,10 +97,9 @@ async function main() {
   console.log(`Backfilling nonces ${fromNonce}..${toNonce}`);
   console.log();
 
-  // Fetch current committee and enrich with IPs
-  const committee = await committeeFetcher.getCurrentCommittee();
-  const committeeWithNodes = await committeeFetcher.enrichCommitteeWithNodeInfo(committee);
-  console.log(`Committee: ${committee.members.length} member(s): ${committee.members.map((m) => m.orbsAddress).join(', ')}`);
+  // Fetch committee nodes
+  const nodes = await payloadFetcher.getCommitteeNodes();
+  console.log(`Found ${nodes.length} committee node(s)`);
   console.log();
 
   let backfilled = 0;
@@ -117,19 +114,21 @@ async function main() {
       continue;
     }
 
-    console.log(`Nonce ${nonce}: collecting signatures...`);
+    console.log(`Nonce ${nonce}: collecting signed payloads...`);
     try {
-      const signatures = await signatureCollector.collectSignatures(committeeWithNodes, nonce);
-      console.log(`  Collected ${signatures.length} signature(s)`);
+      const signedPayloads = await signatureCollector.collectSignedPayloads(nodes, nonce);
+      console.log(`  Collected ${signedPayloads.length} signed payload(s)`);
+      const validated = validateSignedPayloads(signedPayloads);
+      const signatures = validated.signatures;
 
+      const enrichedMembers = await payloadFetcher.enrichAddressesWithMemberInfo(validated.committee);
       const committeeJson = {
-        members: committee.members,
-        config: committee.config ?? [],
-        timestamp: committee.timestamp,
+        members: enrichedMembers,
+        config: validated.config,
+        configEncoded: validated.configEncoded,
+        timestamp: Date.now(),
       };
-      const hash = committeeHash(committeeJson);
-
-      await storeSignedCommittee(nonce, hash, committeeJson, signatures);
+      await storeSignedCommittee(nonce, validated.payloadHash, committeeJson, signatures);
       console.log(`  Stored in DB ✓`);
       backfilled++;
     } catch (error) {

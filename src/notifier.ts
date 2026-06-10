@@ -1,6 +1,7 @@
 import { createHash } from 'crypto';
 
 const DEDUPE_WINDOW_MS = 5 * 60 * 1000; // 5 min
+const DEBUG_PREFIX = process.env.DEBUG === 'true' ? '[debug] ' : '';
 
 class Notifier {
   private botToken: string | null = null;
@@ -23,7 +24,7 @@ class Notifier {
     this.recentMessages.set(dedupeKey, Date.now());
 
     const lines = [
-      `🔴 [committee-sync] ${type}`,
+      `${DEBUG_PREFIX}🔴 [committee-sync] ${type}`,
       ...(context?.chain ? [context.chain] : []),
       message,
       this.timestamp(),
@@ -33,7 +34,7 @@ class Notifier {
 
   async success(title: string, body: string, links: string[] = []): Promise<void> {
     const lines = [
-      `✅ [committee-sync] ${title}`,
+      `${DEBUG_PREFIX}✅ [committee-sync] ${title}`,
       body,
       ...links,
       this.timestamp(),

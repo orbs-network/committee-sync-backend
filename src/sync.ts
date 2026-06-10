@@ -106,6 +106,19 @@ export class EVMSyncer {
         signatureBytes,
       ]);
 
+      // DEBUG mode: skip the actual TX, just log what would be sent
+      if (process.env.DEBUG === 'true') {
+        console.log(`[debug] would send sync() to ${chain.chainName} (${chain.contractAddress})`);
+        console.log(`[debug]   committee: [${committeeAddresses.join(', ')}]`);
+        console.log(`[debug]   config items: ${newConfig.length}`);
+        console.log(`[debug]   signatures: ${signatureBytes.length}`);
+        console.log(`[debug]   txData: ${txData}`);
+        return {
+          success: true,
+          transactionHash: '0xdebug_no_tx_sent',
+        };
+      }
+
       console.log(`[wallet-manager] Encoding sync() for ${chain.chainName} → ${chain.contractAddress}`);
 
       const result = await sendToWalletManager(
