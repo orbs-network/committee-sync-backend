@@ -91,7 +91,8 @@ export class PayloadFetcher {
     const node = pool[Math.floor(Math.random() * pool.length)];
     console.log(`[getSyncHash] querying node ${node.nodeAddress || node.ip} at nonce=${referenceNonce}`);
 
-    const response = await node.get(`${LAMBDA_SCRIPT_BASE_URL}/getSyncHash?nonce=${referenceNonce}`);
+    // 15s timeout (orbs-client default is 5s, occasionally too short for subnet nodes)
+    const response = await node.get(`${LAMBDA_SCRIPT_BASE_URL}/getSyncHash?nonce=${referenceNonce}`, 15000);
     if (!response.ok) {
       throw new Error(`Failed to fetch sync hash: HTTP ${response.status}`);
     }

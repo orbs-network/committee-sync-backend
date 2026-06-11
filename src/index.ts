@@ -203,13 +203,19 @@ class CommitteeSyncService {
             details: `Fetched syncHash ${currentHash.slice(0, 10)}... at nonce ${referenceNonce}`,
           });
         } catch (error) {
-          const errorMsg = `Failed to fetch syncHash: ${error instanceof Error ? error.message : String(error)}`;
+          const rawMsg = error instanceof Error ? error.message : String(error);
+          const errorMsg = `Failed to fetch syncHash: ${rawMsg}`;
           console.error(errorMsg);
-          this.statusServer.recordError({
-            timestamp: new Date().toISOString(),
-            type: 'committee_fetch',
-            message: errorMsg,
-          });
+          // Skip recordError (and therefore Telegram) for transient timeouts —
+          // these self-recover on the next cycle and would otherwise spam.
+          const isTransient = /aborted|timeout|ETIMEDOUT|ECONNRESET|fetch failed/i.test(rawMsg);
+          if (!isTransient) {
+            this.statusServer.recordError({
+              timestamp: new Date().toISOString(),
+              type: 'committee_fetch',
+              message: errorMsg,
+            });
+          }
           return;
         }
 
